@@ -500,3 +500,70 @@ html[data-mode="dark"] .safe.neg .safe-v{color:#F08A80}
 .toast{bottom:calc(84px + env(safe-area-inset-bottom,0px))!important;max-width:calc(100% - 32px)}
 .wrap{max-width:880px}
 .form-sheet .hint{text-align:left;margin-top:-4px}
+
+/* ================= sizing: phones and PCs ================= */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+html,body{overflow-x:hidden;overflow-x:clip;max-width:100%}
+img,svg,canvas,video{max-width:100%}
+.field,input,select,textarea{min-width:0;max-width:100%}
+input[type=date],input[type=month]{width:100%;min-height:46px}
+.two>*,.three>*,.duo>*,.stats>*{min-width:0}
+/* touch screens: 16px+ in every field so iPhone never zooms the page */
+@media (pointer:coarse){
+  .field,.field.mini,.addrow .field,.ai-input .field,input,select,textarea{font-size:16px!important}
+  .qedit{width:44px}
+}
+/* small phones */
+@media (max-width:520px){
+  .addrow{flex-wrap:wrap}
+  .addrow #newtask{flex:1 1 100%}
+  .addrow #newdue{flex:1 1 auto}
+  .sechead h2{font-size:clamp(34px,11vw,60px)}
+  .stats .v{font-size:clamp(18px,5.4vw,26px)}
+  .stats .l{letter-spacing:.06em}
+  .safe{padding:16px}
+  .sheet{max-height:88dvh;overflow-y:auto}
+  .srow{flex-wrap:wrap}
+  .field.mini{max-width:110px}
+}
+@media (max-width:360px){
+  .brand{display:none}
+  .quest{grid-template-columns:26px 1fr auto 30px;gap:8px}
+  .hero .big{font-size:clamp(52px,17vw,80px)}
+}
+/* PCs and tablets in landscape: use the width */
+@media (min-width:1024px){
+  .wrap{max-width:1120px}
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
+  .top-duo .safe{margin:0}
+  .top-duo .stats{grid-template-columns:1fr;border:none;gap:0}
+  .top-duo .stats div{padding:14px 0 14px 16px;border-left:none;border-bottom:1px solid var(--hair)}
+  .top-duo .stats div+div{padding-left:16px}
+  .money-duo .budget{margin-top:0!important}
+  .streak-duo .budget{border-top:none}
+  .pots{grid-template-columns:repeat(4,1fr)}
+  .hist summary{padding:14px 0}
+  .sheet.wide{max-width:640px}
+}
+@media (min-width:1440px){
+  .wrap{max-width:1240px}
+  .pots{grid-template-columns:repeat(6,1fr)}
+}
+/* stat tiles: only the three tiles get borders, not the text inside them */
+.stats .v,.stats .l{padding:0!important;border:0!important}
+.stats>div{padding:16px 0}
+.stats>div+div{padding-left:14px;border-left:1px solid var(--hair)}
+.stats .l{margin-top:6px}
+@media (min-width:1024px){
+  .top-duo .stats>div{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:18px 4px!important;border-left:none!important;border-bottom:1px solid var(--hair)}
+  .top-duo .stats .l{margin-top:0;order:-1}
+}
+/* phones: Claude button becomes a small round button so it never covers taps */
+@media (max-width:520px){
+  .ai-fab{padding:10px;right:12px}
+  .ai-fab .ai-fab-t{display:none}
+  main{padding-bottom:40px}
+}
+.sechead{min-width:0}
+.sechead .idx{min-width:0;flex-shrink:1}
+@media (max-width:520px){.sechead h2{font-size:clamp(30px,9.6vw,56px)}}
