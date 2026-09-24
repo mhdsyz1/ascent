@@ -1,6 +1,6 @@
 // Ascent service worker: opens with no signal. Network first for the app, cache as fallback.
-const CACHE = "ascent-v2";
-const SHELL = ["./", "index.html", "style.css", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const CACHE = "ascent-v3";
+const SHELL = ["./", "index.html", "style.css?v=3", "app.js?v=3", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {
@@ -9,7 +9,7 @@ self.addEventListener("fetch", e => {
   if (url.hostname.endsWith("supabase.co")) return;                     // live data: never cache
   const isLib = /cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|fonts\.(googleapis|gstatic)\.com/.test(url.hostname);
   if (isLib) {                                                           // libraries & fonts: cache first
-    e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })));
+    e.respondWith(caches.match(req, { ignoreSearch: true }).then(hit => hit || fetch(req).then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })));
     return;
   }
   if (url.origin === location.origin) {                                  // the app: network first

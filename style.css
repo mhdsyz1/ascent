@@ -498,3 +498,5 @@ html[data-mode="dark"] .safe.neg .safe-v{color:#F08A80}
 .ai-fab.off .ai-orb{background:var(--hair)}
 .ai-fab.off .ai-orb::after{animation:none;border-color:var(--hair)}
 .toast{bottom:calc(84px + env(safe-area-inset-bottom,0px))!important;max-width:calc(100% - 32px)}
+.wrap{max-width:880px}
+.form-sheet .hint{text-align:left;margin-top:-4px}
