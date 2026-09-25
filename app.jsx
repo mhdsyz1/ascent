@@ -51,6 +51,9 @@ const dayLabel = d => `${DAYS[d.getDay()]} ${d.getDate()} ${cap(MONTHS[d.getMont
 const monthLabel = key => { const [y, m] = key.split("-"); return `${MONTHS[+m - 1]} ${y}`; };
 const monthLong = key => { const [y, m] = key.split("-"); return `${cap(MONTHS[+m - 1])} ${y}`; };
 const diffDays = (a, b) => Math.round((startOfDay(a) - startOfDay(b)) / 86400000);
+const taskUnlock = t => { const d = parseDate(t.due_date); d.setDate(d.getDate() - 7); return d; }; // tasks open 7 days before they're due
+const dayYr = d => dayLabel(d) + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : "");
+const taskLocked = (t, today) => !!t.due_date && !t.done && taskUnlock(t) > today;
 const rowDate = r => { const [y, m] = r.month_date.split("-").map(Number); const dim = new Date(y, m, 0).getDate(); return new Date(y, m - 1, Math.min(r.due_day || 1, dim)); };
 const groupOf = r => (r.category === "Telco" ? "Phone contracts" : r.entity_name);
 const isOblig = r => r.category !== "Income";
@@ -487,6 +490,7 @@ function DebtDetail({ entity, rows, today, onClose, act }) {
       {left > 0 && <div className="minis">
         <button className={"chip-btn" + (mode === "extra" ? " solid2" : "")} onClick={() => setMode(mode === "extra" ? "" : "extra")}>Pay extra</button>
         <button className={"chip-btn" + (mode === "off" ? " solid2" : "")} onClick={() => setMode(mode === "off" ? "" : "off")}>Pay off now</button>
+        <button className={"chip-btn" + (mode === "dates" ? " solid2" : "")} onClick={() => setMode(mode === "dates" ? "" : "dates")}>Change dates</button>
         <button className={"chip-btn" + (mode === "rename" ? " solid2" : "")} onClick={() => setMode(mode === "rename" ? "" : "rename")}>Rename</button>
         <button className={"chip-btn" + (mode === "remove" ? " solid2" : "")} onClick={() => setMode(mode === "remove" ? "" : "remove")}>Remove</button>
       </div>}
@@ -496,6 +500,7 @@ function DebtDetail({ entity, rows, today, onClose, act }) {
         {x > left + .001 && <p className="note-new">That's more than the {fmt(left, 2)} left. Use "Pay off now" instead.</p>}
       </div>}
       {mode === "off" && <div className="confirm"><span>Mark all {fmt(left, 2)} as paid today?</span><button className="danger" onClick={() => { act.payOff(entity); onClose(); }}>Yes, paid off</button><button className="chip-btn" onClick={() => setMode("")}>Cancel</button></div>}
+      {mode === "dates" && <BulkDates rows={rows} act={act} onDone={() => setMode("")} />}
       {mode === "rename" && <div className="box"><div className="two"><Field id="rn" label="New name" value={rename} onChange={e => setRename(e.target.value)} /><div className="fld"><span className="caps mute">&nbsp;</span><button className="solid" disabled={!rename.trim() || rename.trim() === entity} onClick={() => { act.renameDebt(entity, rename.trim()); onClose(); }}>Save name</button></div></div></div>}
       {mode === "remove" && <div className="confirm"><span>Remove the {rows.filter(r => !r.is_cleared).length} unpaid payments? Paid ones stay in your history.</span><button className="danger" onClick={() => { act.removeDebt(entity); onClose(); }}>Remove</button><button className="chip-btn" onClick={() => setMode("")}>Cancel</button></div>}
       <div className="caps mute" style={{ marginTop: 14 }}>Payments · tap the circle to mark paid, tap the amount to edit</div>
@@ -733,6 +738,59 @@ function NewPassword({ onDone }) {
   );
 }
 
+/* ---------------- move many payment dates at once ---------------- */
+const dim = (y, m) => new Date(y, m + 1, 0).getDate();
+const onDay = (dt, day) => new Date(dt.getFullYear(), dt.getMonth(), Math.min(day, dim(dt.getFullYear(), dt.getMonth())));
+function BulkDates({ rows, act, onDone }) {
+  const unpaid = rows.filter(r => !r.is_cleared).sort((a, b) => rowDate(a) - rowDate(b));
+  const [sel, setSel] = useState(() => new Set(unpaid.map(r => r.id)));
+  const [how, setHow] = useState("day"); const [day, setDay] = useState(String(unpaid[0] ? rowDate(unpaid[0]).getDate() : 1));
+  const [first, setFirst] = useState(unpaid[0] ? ymd(rowDate(unpaid[0])) : "");
+  const picked = unpaid.filter(r => sel.has(r.id));
+  const dn = Math.round(num(day));
+  const plan = picked.map((r, i) => {
+    if (how === "day") return dn >= 1 && dn <= 31 ? [r, onDay(rowDate(r), dn)] : null;
+    if (!first) return null; const f = parseDate(first); return [r, onDay(new Date(f.getFullYear(), f.getMonth() + i, 1), f.getDate())];
+  }).filter(Boolean);
+  const changed = plan.filter(([r, dt]) => ymd(dt) !== ymd(rowDate(r)));
+  const tog = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  return (
+    <div className="box">
+      <p className="mute small">Tick the payments to move, then pick how. Paid ones never change.</p>
+      <div className="minis"><button className="chip-btn" onClick={() => setSel(new Set(unpaid.map(r => r.id)))}>All unpaid ({unpaid.length})</button><button className="chip-btn" onClick={() => setSel(new Set())}>None</button></div>
+      <div className="bulk-list">{unpaid.map(r => <label key={r.id} className={"bulk-row" + (sel.has(r.id) ? " on" : "")}><input type="checkbox" checked={sel.has(r.id)} onChange={() => tog(r.id)} /><span>{dayLabel(rowDate(r))} {rowDate(r).getFullYear()}</span><b className="num">{fmt(r.amount_due, 2)}</b></label>)}</div>
+      <div className="cats" style={{ gridTemplateColumns: "1fr 1fr", margin: "12px 0" }}>
+        <button className={"cat" + (how === "day" ? " on" : "")} onClick={() => setHow("day")}>Same day each month</button>
+        <button className={"cat" + (how === "start" ? " on" : "")} onClick={() => setHow("start")}>Start date, then monthly</button>
+      </div>
+      {how === "day" ? <Field id="bd" label="Due on day (1–31)" inputMode="numeric" value={day} onChange={e => setDay(e.target.value)} />
+        : <Field id="bf" label="First payment date" type="date" value={first} onChange={e => setFirst(e.target.value)} />}
+      <p className="mute small" style={{ margin: "8px 0" }}>{changed.length ? `${changed.length} payment${changed.length > 1 ? "s" : ""} will move · first ${dayLabel(changed[0][1])} ${changed[0][1].getFullYear()}${changed.length > 1 ? ` · last ${dayLabel(changed[changed.length - 1][1])} ${changed[changed.length - 1][1].getFullYear()}` : ""}` : "Nothing to change yet."}</p>
+      <button className="solid" disabled={!changed.length} onClick={() => { act.bulkDates(changed.map(([r, dt]) => [r, ymd(dt)])); onDone(); }}>Move {changed.length || ""} payment{changed.length === 1 ? "" : "s"}</button>
+    </div>
+  );
+}
+/* every debt's due day on one screen */
+function DueDaysSheet({ ents, onClose, act }) {
+  const list = Object.values(ents).map(e => { const up = e.rows.filter(r => !r.is_cleared).sort((a, b) => rowDate(a) - rowDate(b)); return up.length ? { name: e.name, up, day: rowDate(up[0]).getDate(), mixed: new Set(up.map(r => rowDate(r).getDate())).size > 1 } : null; }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  const [v, setV] = useState(() => Object.fromEntries(list.map(e => [e.name, String(e.day)])));
+  const todo = list.flatMap(e => { const dd = Math.round(num(v[e.name])); if (!(dd >= 1 && dd <= 31)) return []; return e.up.map(r => [r, onDay(rowDate(r), dd)]).filter(([r, dt]) => ymd(dt) !== ymd(rowDate(r))); });
+  const nDebts = new Set(todo.map(([r]) => r.entity_name)).size;
+  return (
+    <Sheet title="Due dates" hint="Set the day each debt is due every month. Only unpaid payments move." onClose={onClose} wide>
+      <div className="dd-list">
+        {list.map(e => (
+          <div key={e.name} className="dd-row">
+            <span><b>{e.name}</b><small className="mute">{e.up.length} unpaid · next {dayLabel(rowDate(e.up[0]))}{e.mixed ? " · days differ" : ""}</small></span>
+            <input className="field mini" inputMode="numeric" aria-label={`${e.name} due day`} value={v[e.name]} onChange={ev => setV({ ...v, [e.name]: ev.target.value })} />
+          </div>
+        ))}
+      </div>
+      <button className="solid" style={{ marginTop: 14 }} disabled={!todo.length} onClick={() => { act.bulkDates(todo.map(([r, dt]) => [r, ymd(dt)])); onClose(); }}>{todo.length ? `Move ${todo.length} payment${todo.length > 1 ? "s" : ""} across ${nDebts} debt${nDebts > 1 ? "s" : ""}` : "No changes yet"}</button>
+    </Sheet>
+  );
+}
+
 /* ---------------- Guide: next steps + how-to (works without AI) ---------------- */
 const HOWTO = [
   { q: "Add a debt (BNPL, PayLater, loan, phone contract)", k: "add debt new bnpl paylater grab atome loan owe borrow phone", a: ["Money → + Add a debt.", "Name it (must be different from existing debts, e.g. GrabFood), pick the type.", "Monthly payment, how many payments are left, next payment date.", "One-off? Set payments left to 1.", "Pick 'One I already had' or 'New borrowing' honestly, then Add debt."], go: "debt", btn: "Add a debt" },
@@ -906,7 +964,7 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
             <div className="budget reveal">
               <div className="caps mute">Launch checklist</div>
               {quests.map(q => <div key={q.t} className={"quest-line" + (q.ok ? " ok" : "")}><span className="qk">{q.ok ? "✓" : "·"}</span>{q.t}</div>)}
-              {todos.map(t => <button key={t.id} className="quest-line todo-line" onClick={() => act.toggleTask(t)}><span className="qk">○</span>{t.title}{t.due_date ? " · " + dayLabel(parseDate(t.due_date)) : ""}</button>)}
+              {todos.map(t => { const lk = taskLocked(t, today); return <button key={t.id} className={"quest-line todo-line" + (lk ? " locked" : "")} onClick={() => act.toggleTask(t)}><span className="qk">{lk ? "🔒" : "○"}</span>{t.title}{t.due_date ? " · " + dayLabel(parseDate(t.due_date)) : ""}{lk ? ` · unlocks ${dayYr(taskUnlock(t))}` : ""}</button>; })}
             </div>
           </div>
         </section>
@@ -994,7 +1052,7 @@ function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewT
             {!hasArea && <div className="empty">Run worlds-setup.sql in Supabase so new to-dos you add here stay in Career.</div>}
             {todos.length === 0 && <div className="empty">Nothing open. Add the next thing below.</div>}
             {todos.map(t => <div className="qwrap" key={t.id}>
-              <button className="quest" onClick={() => act.toggleTask(t)}><span className="i">&gt;</span><span><div className="t">{t.title}</div><div className="m">{t.due_date ? dayLabel(parseDate(t.due_date)) : "Anytime"}</div></span><span className="a" /><span className="ck"><Tick /></span></button>
+              {(() => { const lk = taskLocked(t, today); return <button className={"quest" + (lk ? " locked" : "")} aria-disabled={lk} onClick={() => act.toggleTask(t)}><span className="i">{lk ? "⛓" : ">"}</span><span><div className="t">{t.title}</div><div className="m">{t.due_date ? dayLabel(parseDate(t.due_date)) + " " + parseDate(t.due_date).getFullYear() : "Anytime"}{lk ? <em className="lk"> · unlocks {dayYr(taskUnlock(t))}</em> : null}</div></span><span className="a" /><span className="ck">{lk ? <span aria-hidden="true">🔒</span> : <Tick />}</span></button>; })()}
               <button className="qedit" aria-label={"More options for " + t.title} onClick={() => setSheet({ type: "task", task: t })}>⋯</button>
             </div>)}
             <form className="addrow" onSubmit={e => { e.preventDefault(); const t = newTask.trim(); if (!t) return; act.addTask(t, newDue, hasArea ? "career" : undefined); setNewTask(""); setNewDue(""); }}>
@@ -1253,7 +1311,7 @@ function Hub({ d, calc, settings, today, world, onEnter, onSignOut, onUrge }) {
   const to = i => { const n = (i + cards.length) % cards.length; if (n === idx) return; Sound.move(); buzz(6); setIdx(n); setLine(cards[n].say); };
   const enter = () => onEnter(cards[idx]);
   useEffect(() => {
-    const k = e => { if (/input|textarea|select/i.test(e.target.tagName)) return;
+    const k = e => { if (/input|textarea|select/i.test(e.target.tagName) || document.querySelector(".ug-rep,.ug-lock,.urge")) return;
       if (e.key === "ArrowRight") to(idx + 1); else if (e.key === "ArrowLeft") to(idx - 1); else if (e.key === "Enter") enter(); };
     addEventListener("keydown", k); return () => removeEventListener("keydown", k);
   });
@@ -1396,6 +1454,91 @@ function LockSettings() {
   );
 }
 
+/* ---------- monthly report card: race-results screen ---------- */
+const MONTH_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const RANK_MSG = {
+  S: "Perfect run, master. That's how champions drive.",
+  A: "Strong month. Clean up one thing and it's an S.",
+  B: "Solid. You stayed on the road. Cleaner lines next month.",
+  C: "Rough month. It happens. Refuel, reset, go again.",
+};
+function monthReport(d, settings, key, today) {
+  const [y, m] = key.split("-").map(Number);
+  const start = new Date(y, m - 1, 1), end = new Date(y, m, 0), days = end.getDate();
+  const live = key === ym(today), upto = live ? today : end, sofar = live ? today.getDate() : days;
+  const inKey = s => String(s || "").slice(0, 7) === key;
+  const due = d.sched.filter(r => isOblig(r) && inKey(r.month_date) && rowDate(r) <= upto);
+  const onTime = due.filter(r => r.is_cleared && (!r.paid_on || parseDate(r.paid_on) <= rowDate(r)));
+  const spend = d.spend.filter(s => inKey(s.spent_on)).reduce((a, s) => a + Number(s.amount), 0);
+  const budget = Number(settings.budget) || 0;
+  const studyMin = d.study.filter(s => inKey(s.studied_on)).reduce((a, s) => a + s.minutes, 0);
+  const sStart = parseDate(settings.studyStart || "2099-01-01");
+  const studyDays = sStart > upto ? 0 : diffDays(upto, sStart > start ? sStart : start) + 1;
+  const target = (Number(settings.studyTarget) || 240) * studyDays / 7;
+  const since = parseDate(d.state.trading_free_since || ymd(today));
+  const free = since > upto ? 0 : Math.min(sofar, diffDays(upto, since > start ? since : start) + 1);
+  const paid = d.sched.filter(r => r.is_cleared && isOblig(r) && inKey(r.paid_on || r.month_date)).reduce((a, r) => a + Number(r.amount_due), 0);
+  const moves = d.moves.filter(x => inKey(ymd(new Date(x.created_at))) && Number(x.amount) > 0);
+  const inv = investInfo(d, today);
+  const invested = inv.pot ? moves.filter(x => x.pot_id === inv.pot.id).reduce((a, x) => a + Number(x.amount), 0) : 0;
+  const saved = moves.reduce((a, x) => a + Number(x.amount), 0) - invested;
+  const ms = d.ms.filter(x => x.done && x.done_at && inKey(ymd(new Date(x.done_at)))).map(x => x.title);
+  const hrs = v => (v / 60).toFixed(v % 60 ? 1 : 0);
+  const rows = [
+    { k: "bills", l: "Bills paid on time", v: `${onTime.length} / ${due.length}`, p: due.length ? onTime.length / due.length : null, w: 30 },
+    { k: "free", l: "Trading-free days", v: `${free} / ${sofar}`, p: free / sofar, w: 30 },
+    { k: "budget", l: "Spent vs budget", v: `${fmt(spend)} / ${fmt(budget)}`, p: budget ? (spend <= budget ? 1 : Math.max(0, 1 - (spend - budget) / budget)) : null, w: 25 },
+    { k: "study", l: "Study hours", v: `${hrs(studyMin)} / ${hrs(target)} h`, p: studyDays ? Math.min(1, studyMin / Math.max(1, target)) : null, w: 15 },
+  ];
+  const scored = rows.filter(r => r.p != null), tw = scored.reduce((a, r) => a + r.w, 0);
+  const score = tw ? scored.reduce((a, r) => a + r.p * r.w, 0) / tw : 1;
+  const rank = score >= .95 ? "S" : score >= .8 ? "A" : score >= .6 ? "B" : "C";
+  const weak = scored.filter(r => r.p < 1).sort((a, b) => a.p * a.w - b.p * b.w)[0];
+  return { key, live, rank, score: Math.round(score * 100), rows, paid, saved, invested, ms, weak: weak ? weak.l : null };
+}
+/* what gets frozen once a month is over */
+const snapReport = r => ({ rank: r.rank, score: r.score, rows: r.rows.map(x => [x.k, x.l, x.v, x.p == null ? null : Math.round(x.p * 100) / 100, x.w]), paid: r2(r.paid), saved: r2(r.saved), invested: r2(r.invested), ms: r.ms, weak: r.weak });
+const unsnap = (key, s) => ({ key, live: false, rank: s.rank, score: s.score, rows: s.rows.map(([k, l, v, p, w]) => ({ k, l, v, p, w })), paid: s.paid || 0, saved: s.saved || 0, invested: s.invested || 0, ms: s.ms || [], weak: s.weak || null });
+
+function ReportCard({ rep, onClose, onPrev, onNext }) {
+  useEffect(() => {
+    const t = setTimeout(() => { if (rep.rank === "S" || rep.rank === "A") Sound.win(); else Sound.select(); buzz([20, 40, 60]); }, CALM ? 0 : 1500);
+    const k = e => { if (e.key === "Escape" || e.key === "Enter") onClose(); else if (e.key === "ArrowLeft" && onPrev) onPrev(); else if (e.key === "ArrowRight" && onNext) onNext(); };
+    addEventListener("keydown", k); return () => { clearTimeout(t); removeEventListener("keydown", k); };
+  }, [rep.key]);
+  const [y, m] = rep.key.split("-");
+  const hi = [rep.paid > 0 && ["Debt & bills paid", fmt(rep.paid)], rep.saved > 0 && ["Into savings", fmt(rep.saved)], rep.invested > 0 && ["Invested", fmt(rep.invested)]].filter(Boolean);
+  return (
+    <div className="ug-rep" role="dialog" aria-modal="true" aria-label={`Report card ${monthLong(rep.key)}`} key={rep.key}>
+      <div className="ug-rep-in">
+        <div className="ug-rep-head">
+          {onPrev ? <button className="ug-arrow l" aria-label="Previous month" onClick={onPrev}>‹</button> : <span />}
+          <div>
+            <div className="ug-hud">{rep.live ? "This month so far" : "Month results"}</div>
+            <div className="ug-t chrome ug-rep-m">{MONTH_FULL[Number(m) - 1]} <small>{y}</small></div>
+          </div>
+          {onNext ? <button className="ug-arrow r" aria-label="Next month" onClick={onNext}>›</button> : <span />}
+        </div>
+        <div className={"ug-rank r-" + rep.rank} aria-label={`Rank ${rep.rank}, ${rep.score} percent`}><b>{rep.rank}</b><span>{rep.score}%</span></div>
+        <div className="ug-rep-rows">
+          {rep.rows.map((r, i) => (
+            <div key={r.k} className={"ug-rep-row" + (r.p == null ? " na" : r.p >= 1 ? " ok" : "")} style={{ animationDelay: (CALM ? 0 : .25 + i * .22) + "s" }}>
+              <div className="ug-stat"><span>{r.l}</span><b>{r.p == null ? "—" : r.v}</b></div>
+              {r.p == null ? <div className="ug-hud">Not counted this month</div> : <Segs p={r.p * 100} c={r.p >= 1 ? "gr" : "cy"} />}
+            </div>
+          ))}
+        </div>
+        {(hi.length > 0 || rep.ms.length > 0) && <div className="ug-rep-hi">
+          {hi.map(([l, v]) => <div key={l}><span className="ug-hud">{l}</span><b>{v}</b></div>)}
+          {rep.ms.map(t => <div key={t} className="ms"><span className="gr">★</span> {t}</div>)}
+        </div>}
+        <p className="ug-rep-msg">{RANK_MSG[rep.rank]}{rep.weak && rep.rank !== "S" ? <> Focus next: <b>{rep.weak.toLowerCase()}</b>.</> : null}</p>
+        <button className="ug-btn" onClick={onClose}>Continue <span className="key">A</span></button>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- data store: live, cached for offline, queued writes ---------------- */
 function useStore(session) {
   const first = useRef(readCache());
@@ -1467,6 +1610,7 @@ function Main({ session, mode, setMode }) {
   const { d, setD, status, cacheAt, queued, load, write } = useStore(session);
   const firstToday = lsGet("ascent-loader-day", "") !== ymd(new Date());
   const quick = useRef(new URLSearchParams(location.search).get("do")); // home-screen shortcut: ?do=spend | ?do=urge
+  const viaShortcut = useRef(!!quick.current);
   const [loaded, setLoaded] = useState(!!quick.current || !(firstToday && MOTION !== "off"));
   const [menu, setMenu] = useState(false);
   const [sound, setSound] = useState(Sound.on);
@@ -1488,6 +1632,7 @@ function Main({ session, mode, setMode }) {
   const [portal, setPortal] = useState(null);
   const [view, setView] = useState(quick.current ? "world" : "hub"); // the main menu shows on every open, except home-screen shortcuts
   const [wipe, setWipe] = useState(null);
+  const [report, setReport] = useState(null); // "YYYY-MM" of the report card being shown
   const [tab, setTabRaw] = useState(() => lsGet("ascent-tab-" + world, ""));
   const tabs = UG_TABS[world] || UG_TABS.money;
   const curTab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
@@ -1513,7 +1658,7 @@ function Main({ session, mode, setMode }) {
   }, [d]);
   useEffect(() => {
     if (view !== "world") return;
-    const k = e => { if (/input|textarea|select/i.test(e.target.tagName) || sheet || urge || guide || aiOpen) return;
+    const k = e => { if (/input|textarea|select/i.test(e.target.tagName) || sheet || urge || guide || aiOpen || report || document.querySelector(".ug-lock")) return;
       const i = tabs.findIndex(t => t[0] === curTab);
       if ((e.key === "ArrowRight" || e.key === "e") && tabs[i + 1]) setTab(tabs[i + 1][0]);
       else if ((e.key === "ArrowLeft" || e.key === "q") && tabs[i - 1]) setTab(tabs[i - 1][0]);
@@ -1521,8 +1666,9 @@ function Main({ session, mode, setMode }) {
     addEventListener("keydown", k); return () => removeEventListener("keydown", k);
   });
   /* phone back button: close what's open, then go back to the main menu, then (twice) leave */
-  const backRef = useRef(null);
+  const backRef = useRef(null); const closeRepRef = useRef(null);
   backRef.current = () => {
+    if (report) { closeRepRef.current ? closeRepRef.current() : setReport(null); return true; }
     if (urge) { setUrge(false); return true; }
     if (aiOpen) { setAiOpen(false); return true; }
     if (guide) { setGuide(false); return true; }
@@ -1716,6 +1862,16 @@ function Main({ session, mode, setMode }) {
     setTimeout(() => setParty(p => p || msParty(hit, innerWidth / 2, innerHeight / 2)), 1200);
   }, [d, calc]);
 
+  /* new month: show last month's report card once */
+  const repGuard = useRef(false);
+  useEffect(() => {
+    if (!d || !calc || !loaded || repGuard.current || viaShortcut.current) return;
+    repGuard.current = true;
+    const prev = ym(addMonths(today, -1));
+    if ((settings.reports || {})[prev] || !calc.history.some(h => h.key === prev)) return;
+    setTimeout(() => setReport(prev), 800);
+  }, [d, calc, loaded]);
+
   if (!d || !calc) return (
     <>{!loaded && <Loader jdm ready={false} onDone={() => {}} />}
       {status && <div className="status">{status === "offline" ? "No connection, and nothing saved on this phone yet. Connect once to load your data." : status === "setup" ? "Almost there: run supabase-v2.sql in Supabase, then reload." : status}</div>}</>
@@ -1763,6 +1919,12 @@ function Main({ session, mode, setMode }) {
       const dt = parseDate(dateStr), patch = { amount_due: r2(amount), month_date: ym(dt) + "-01", due_day: dt.getDate() };
       localRow(r.id, patch);
       if (await commit([{ t: "update", table: "cashflow_schedule", patch, f: [["eq", "id", r.id]] }, ...(r.is_cleared ? cashOps(-(r2(amount) - Number(r.amount_due))) : [])])) flash("Payment updated");
+    },
+    bulkDates: async list => { // [[row, "YYYY-MM-DD"], ...]
+      const patches = list.map(([r, ds]) => { const dt = parseDate(ds); return [r.id, { month_date: ym(dt) + "-01", due_day: dt.getDate() }]; });
+      const P = Object.fromEntries(patches);
+      setD(x => ({ ...x, sched: x.sched.map(r => P[r.id] ? { ...r, ...P[r.id] } : r) }));
+      if (await commit(patches.map(([id, patch]) => ({ t: "update", table: "cashflow_schedule", patch, f: [["eq", "id", id]] })))) { Sound.check(); flash(`${patches.length} payment${patches.length > 1 ? "s" : ""} moved`); }
     },
     renameDebt: async (from, to) => {
       setD(s => ({ ...s, sched: s.sched.map(r => r.entity_name === from && isOblig(r) ? { ...r, entity_name: to } : r) }));
@@ -1826,6 +1988,7 @@ function Main({ session, mode, setMode }) {
     editPot: async (pot, patch) => { setD(s => ({ ...s, pots: s.pots.map(p => p.id === pot.id ? { ...p, ...patch } : p) })); if (await commit([{ t: "update", table: "wealth_portfolio", patch, f: [["eq", "id", pot.id]] }])) flash("Pot saved"); },
     addPot: async p => { setSheet(null); const row = { id: uid(), balance: 0, category: "Goal", sort: 80, ...p }; setD(s => ({ ...s, pots: [...s.pots, row] })); if (await commit([{ t: "insert", table: "wealth_portfolio", row }])) flash(`${p.name} created`); },
     toggleTask: async (t, silent) => {
+      if (!t.done && taskLocked(t, today)) { Sound.back(); buzz([30, 30]); flash(`Locked · unlocks ${dayYr(taskUnlock(t))}`); return; }
       const next = !t.done, patch = { done: next, done_at: next ? new Date().toISOString() : null };
       setD(s => ({ ...s, tasks: s.tasks.map(x => x.id === t.id ? { ...x, ...patch } : x) }));
       if (await commit([{ t: "update", table: "ascent_tasks", patch, f: [["eq", "id", t.id]] }]) && next && !silent) { Sound.check(); buzz(12); showUndo(`Done: ${t.title}`, () => act.toggleTask({ ...t, ...patch }, true)); }
@@ -1840,6 +2003,11 @@ function Main({ session, mode, setMode }) {
       if (await commit([{ t: "update", table: "ascent_milestones", patch, f: [["eq", "id", m.id]] }]) && next) setParty(msParty(m, ev ? ev.clientX : innerWidth / 2, ev ? ev.clientY : innerHeight / 2));
     },
     addMs: async p => { setSheet(null); const row = { id: uid(), sort: (d.ms.reduce((mx, m) => Math.max(mx, m.sort || 0), 0) + 10), done: false, ...p }; setD(s => ({ ...s, ms: [...s.ms, row] })); if (await commit([{ t: "insert", table: "ascent_milestones", row }])) flash("Milestone added"); },
+    saveReport: (key, snap) => { // freeze a finished month's result (quietly)
+      const merged = { ...settings, reports: { ...(settings.reports || {}), [key]: snap } };
+      setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
+      commit([{ t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] }]);
+    },
     saveSettings: async (s, since) => {
       const merged = { ...settings, ...s }; setD(x => ({ ...x, state: { ...x.state, settings: merged, trading_free_since: since } }));
       if (await commit([{ t: "update", table: "ascent_state", patch: { settings: merged, trading_free_since: since }, f: [["eq", "id", 1]] }])) flash("Settings saved");
@@ -1907,6 +2075,16 @@ function Main({ session, mode, setMode }) {
   const nextMs = d.ms.find(m => !m.done);
   const stale = cacheAt && Date.now() - cacheAt > 60000;
 
+  const repKeys = [...new Set([calc.monthKey, ...calc.history.map(h => h.key)])].sort();
+  const repSnap = report && (settings.reports || {})[report];
+  const repData = report ? (repSnap ? unsnap(report, repSnap) : monthReport(d, settings, report, today)) : null;
+  const repIdx = repKeys.indexOf(report);
+  const closeRep = () => { Sound.back(); if (repData && !repSnap && !repData.live) act.saveReport(report, snapReport(repData)); setReport(null); };
+  closeRepRef.current = report ? closeRep : null;
+  const repEl = repData && <ReportCard rep={repData} onClose={closeRep}
+    onPrev={repIdx > 0 ? () => { Sound.move(); if (!repSnap && !repData.live) act.saveReport(report, snapReport(repData)); setReport(repKeys[repIdx - 1]); } : null}
+    onNext={repIdx >= 0 && repIdx < repKeys.length - 1 ? () => { Sound.move(); if (!repSnap && !repData.live) act.saveReport(report, snapReport(repData)); setReport(repKeys[repIdx + 1]); } : null} />;
+
   const hubView = view === "hub" && (
     <React.Fragment key="hub">
       {!loaded && <Loader jdm ready={!!d} onDone={() => { lsSet("ascent-loader-day", ymd(new Date())); setLoaded(true); }} />}
@@ -1914,6 +2092,7 @@ function Main({ session, mode, setMode }) {
       {!err && status === "offline" && <div className="status soft" role="status">Offline · showing data from {cacheAt ? ago(new Date(cacheAt).toISOString()) : "earlier"}</div>}
       <Hub d={d} calc={calc} settings={settings} today={today} world={world} onEnter={enterStage} onSignOut={signOut} onUrge={() => { Sound.select(); setUrge(true); }} />
       {party && <Party {...party} onDone={() => setParty(null)} />}
+      {repEl}
       {toast && <div className="toast">{toast}</div>}
       {urge && <Urge left={calc.remaining} streak={calc.streak} beaten={Number(d.state.urges_beaten) || 0} onClose={() => setUrge(false)} onBeaten={beatUrge} onTalk={talkUrge} />}
     </React.Fragment>
@@ -2019,7 +2198,7 @@ function Main({ session, mode, setMode }) {
               {calc.later.length > 0 && <button className="chip-btn" onClick={() => setShowLater(!showLater)}>{showLater ? "Hide" : "Show"} later tasks ({calc.later.length})</button>}
               {calc.tasksDone.length > 0 && <button className="chip-btn" onClick={() => setShowDone(!showDone)}>{showDone ? "Hide" : "Show"} done ({calc.tasksDone.length})</button>}
             </div>
-            {showLater && <div className="recent">{calc.later.map(t => <div key={t.id}><button className="rowbtn" onClick={() => setSheet({ type: "task", task: t })}>{dayLabel(parseDate(t.due_date))} · {t.title}</button><span /></div>)}</div>}
+            {showLater && <div className="recent">{calc.later.map(t => <div key={t.id}><button className="rowbtn" onClick={() => setSheet({ type: "task", task: t })}>{taskLocked(t, today) ? "🔒 " : ""}{dayLabel(parseDate(t.due_date))} · {t.title}</button><span className="mute small">{taskLocked(t, today) ? `unlocks ${dayYr(taskUnlock(t))}` : ""}</span></div>)}</div>}
             {showDone && <div className="recent">{calc.tasksDone.slice(0, 30).map(t => <div key={t.id}><button className="rowbtn done-t" onClick={() => act.toggleTask(t, true)} title="Tap to mark not done">✓ {t.title}</button><button className="linkbtn" onClick={() => setSheet({ type: "task", task: t })}>Edit</button></div>)}</div>}
             {calc.soon.length > 0 && <div className="recent" style={{ marginTop: 16 }}>
               <div><span className="caps">Coming up · next 30 days</span><span /></div>
@@ -2050,7 +2229,7 @@ function Main({ session, mode, setMode }) {
               <span className="e">{calc.phoneLeft < .005 ? "All paid" : `Last payment ${monthLabel(calc.phoneLast.slice(0, 7))} · ${calc.phones.length} lines`}</span>
               <div className="lines">{calc.phones.map(p => { const nx = p.rows.find(r => !r.is_cleared); return <button key={p.name} className="line-btn" onClick={() => setSheet({ type: "debt-detail", entity: p.name })}><span>{p.name}{nx ? <em className="mute"> · next {dayLabel(nx._dt)}</em> : null}</span><span className="num">{fmt(p.left, 2)}</span></button>; })}</div>
             </div>}
-            <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "debt" })}>+ Add a debt</button><button className="chip-btn" onClick={() => setSheet({ type: "income" })}>Income</button><button className="chip-btn" onClick={() => setSheet({ type: "cash" })}>Cash in bank</button></div>
+            <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "debt" })}>+ Add a debt</button><button className="chip-btn" onClick={() => setSheet({ type: "due-days" })}>Due dates</button><button className="chip-btn" onClick={() => setSheet({ type: "income" })}>Income</button><button className="chip-btn" onClick={() => setSheet({ type: "cash" })}>Cash in bank</button></div>
           </div>
 
           </div><div>
@@ -2081,6 +2260,7 @@ function Main({ session, mode, setMode }) {
         <section className="block wrap" id="history">
           <div className="sechead"><Scramble text="HISTORY" /><span className="idx">month by month</span></div>
           <div className="reveal">
+            <div className="minis" style={{ marginBottom: 12 }}><button className="chip-btn solid2" onClick={() => { Sound.select(); setReport(calc.monthKey); }}>🏁 Report card · {MONTH_FULL[today.getMonth()]} so far</button></div>
             {calc.history.length === 0 && <div className="empty">Your first month will show here once you start ticking things off.</div>}
             {calc.history.slice(0, histN).map(h => (
               <details className="hist" key={h.key} open={h.key === calc.monthKey}>
@@ -2094,6 +2274,7 @@ function Main({ session, mode, setMode }) {
                   <div><span>Study</span><b className="num">{(h.study / 60).toFixed(1)} h</b></div>
                 </div>
                 {Object.keys(h.byCat).length > 0 && <div className="cats-line">{Object.entries(h.byCat).map(([c, v]) => <span key={c}>{c} <b>{fmt(v)}</b></span>)}</div>}
+                {h.key !== calc.monthKey && <div className="minis"><button className="chip-btn" onClick={() => { Sound.select(); setReport(h.key); }}>{(settings.reports || {})[h.key] ? `Report card · rank ${settings.reports[h.key].rank}` : "Open report card"}</button></div>}
               </details>
             ))}
             {calc.history.length > histN && <div className="minis"><button className="chip-btn" onClick={() => setHistN(histN + 12)}>Show older months</button></div>}
@@ -2122,6 +2303,7 @@ function Main({ session, mode, setMode }) {
       {sheet?.type === "study" && <StudySheet onClose={() => setSheet(null)} onSave={act.logStudy} />}
       {sheet?.type === "debt" && <DebtSheet names={Object.keys(calc.ents)} onClose={() => setSheet(null)} onSave={act.addDebt} />}
       {sheet?.type === "debt-detail" && calc.ents[sheet.entity] && <DebtDetail entity={sheet.entity} rows={calc.ents[sheet.entity].rows} today={today} onClose={() => setSheet(null)} act={act} />}
+      {sheet?.type === "due-days" && <DueDaysSheet ents={calc.ents} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "income" && <IncomeSheet rows={calc.inc} settings={settings} today={today} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "cash" && <CashSheet cash={calc.cash} onClose={() => setSheet(null)} onSave={act.setCash} />}
       {sheet?.type === "pot" && <PotSheet pot={d.pots.find(p => p.id === sheet.pot.id) || sheet.pot} moves={d.moves} onClose={() => setSheet(null)} act={act} />}
@@ -2136,6 +2318,7 @@ function Main({ session, mode, setMode }) {
         <div className="minis"><button className="chip-btn solid2" onClick={async () => { const s = await checkAi(); if (s === "ready") { setSheet(null); setAiOpen(true); } else flash(s === "nokey" ? "Deployed, but the ANTHROPIC_API_KEY secret is missing." : "Still not switched on."); }}>Check again</button></div>
       </Sheet>}
       {party && <Party {...party} onDone={() => setParty(null)} />}
+      {repEl}
       {toast && !undo && <div className="toast">{toast}</div>}
       {undo && <div className="toast undo" key={undo.id}><span>{undo.msg}</span><button onClick={() => { const f = undo.fn; setUndo(null); f(); flash("Undone"); }}>Undo</button></div>}
       {guide && <Guide steps={steps} aiState={aiState} onClose={() => setGuide(false)} onGo={guideGo} onAskClaude={() => { setGuide(false); openClaude(); }} />}
