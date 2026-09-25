@@ -1,0 +1,14 @@
+# Pings Supabase every 3 days so the free project never pauses during BMT.
+name: Keep Supabase awake
+on:
+  schedule:
+    - cron: "0 3 */3 * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -s -o /dev/null -w "%{http_code}\n" \
+            "https://vdzpmoulolbvuxwrisxp.supabase.co/rest/v1/ascent_state?select=id" \
+            -H "apikey: sb_publishable_J3TUDWm-312uxTUUXRrY0w_rmOgfXzg"
