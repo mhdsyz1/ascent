@@ -181,139 +181,7 @@ function Ring({ pct }) {
 }
 
 /* ---------------- the mountain ---------------- */
-function Mountain({ progress, mode }) {
-  const wrap = useRef(null), you = useRef(null), top = useRef(null);
-  const target = useRef(progress); target.current = progress;
-  const api = useRef({});
-  useEffect(() => {
-    if (!window.THREE) return;
-    const T = window.THREE, el = wrap.current;
-    const renderer = new T.WebGLRenderer({ antialias: !MOBILE, alpha: true, powerPreference: "low-power" });
-    renderer.setPixelRatio(MOBILE ? 1 : Math.min(2, devicePixelRatio || 1));
-    el.prepend(renderer.domElement);
-    const scene = new T.Scene(), cam = new T.PerspectiveCamera(34, 1, .1, 50), group = new T.Group(); scene.add(group);
-    const H = (x, z) => 1.15 * Math.exp(-(x * x + z * z) * 2.3) + .07 * Math.sin(7 * x + 1) * Math.cos(6 * z) * Math.exp(-(x * x + z * z)) + .05 * Math.exp(-((x - .5) ** 2 + (z + .3) ** 2) * 9);
-    const pos = [], N = MOBILE ? 66 : 90, R = 1.35;
-    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-      const x = -R + 2 * R * i / (N - 1) + (Math.random() - .5) * .012, z = -R + 2 * R * j / (N - 1) + (Math.random() - .5) * .012;
-      if (x * x + z * z > R * R) continue; pos.push(x, H(x, z) + (Math.random() - .5) * .008, z);
-    }
-    const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
-    const ink = new T.Color(cssVar("--ink") || "#111");
-    const pm = new T.PointsMaterial({ color: ink, size: .009, transparent: true, opacity: .38, sizeAttenuation: true });
-    group.add(new T.Points(g, pm));
-    const PATH = 500, path = [];
-    for (let k = 0; k <= PATH; k++) { const t = k / PATH, a = t * Math.PI * 4.2 + .6, r = 1 - t, x = Math.cos(a) * r, z = Math.sin(a) * r; path.push(new T.Vector3(x, H(x, z) + .015, z)); }
-    const pg = new T.BufferGeometry().setFromPoints(path);
-    const dashed = new T.Line(pg, new T.LineDashedMaterial({ color: ink, dashSize: .02, gapSize: .035, transparent: true, opacity: .3 })); dashed.computeLineDistances(); group.add(dashed);
-    const walked = new T.Line(pg.clone(), new T.LineBasicMaterial({ color: ink })); group.add(walked);
-    const marker = new T.Mesh(new T.SphereGeometry(.03, 20, 20), new T.MeshBasicMaterial({ color: ink }));
-    const halo = new T.Mesh(new T.RingGeometry(.05, .06, 40), new T.MeshBasicMaterial({ color: ink, transparent: true, side: T.DoubleSide }));
-    group.add(marker, halo);
-    const summit = new T.Vector3(0, H(0, 0), 0);
-    const pole = new T.Line(new T.BufferGeometry().setFromPoints([summit, summit.clone().add(new T.Vector3(0, .22, 0))]), new T.LineBasicMaterial({ color: ink }));
-    const flag = new T.Mesh(new T.BufferGeometry().setFromPoints([summit.clone().add(new T.Vector3(0, .22, 0)), summit.clone().add(new T.Vector3(.12, .18, 0)), summit.clone().add(new T.Vector3(0, .14, 0))]), new T.MeshBasicMaterial({ color: ink, side: T.DoubleSide }));
-    group.add(pole, flag);
-    api.current.setColor = c => [pm, dashed.material, walked.material, marker.material, halo.material, pole.material, flag.material].forEach(m => m.color.set(c));
-    let OFFX = .45, w = 0, h = 0, px = 0, py = 0, cur = 0, raf, alive = true;
-    const size = () => {
-      w = el.clientWidth; h = el.clientHeight; if (!w || !h) return; renderer.setSize(w, h, false); cam.aspect = w / h;
-      const narrow = w < 640; OFFX = narrow ? .28 : .45; cam.position.set(0, narrow ? 1.35 : 1.2, narrow ? 4.4 : 3.6); cam.lookAt(0, .42, 0); cam.updateProjectionMatrix();
-    };
-    size(); const ro = new ResizeObserver(size); ro.observe(el);
-    const onMove = e => { px = e.clientX / innerWidth - .5; py = e.clientY / innerHeight - .5; };
-    addEventListener("pointermove", onMove);
-    const v = new T.Vector3(); const youB = you.current ? you.current.querySelector("b") : { textContent: "" };
-    const place = (node, p3) => { v.copy(p3).applyMatrix4(group.matrixWorld).project(cam); node.style.transform = `translate(${(v.x + 1) / 2 * w}px,${(1 - v.y) / 2 * h}px) translate(-50%,-160%)`; };
-    let t0 = performance.now(), lastOp = "";
-    const loop = now => {
-      if (!alive) return;
-      if (!document.hidden && scrollY < el.clientHeight * 1.1) {
-        const dt = now - t0; t0 = now;
-        cur += (target.current - cur) * .06;
-        const idx = Math.max(1, Math.round(cur * PATH));
-        walked.geometry.setDrawRange(0, idx + 1);
-        const p = path[Math.min(PATH, idx)]; marker.position.copy(p); halo.position.copy(p);
-        halo.lookAt(cam.position); const s = 1 + .35 * Math.sin(now / 300); halo.scale.set(s, s, s);
-        if (MOTION === "on") group.rotation.y += dt * .00012;
-        group.rotation.x += ((py * .25) - group.rotation.x) * .05;
-        group.position.x += ((OFFX + px * .15) - group.position.x) * .05;
-        const sc = Math.min(1, scrollY / h); group.position.y = sc * .5; const op = (1 - sc * .9).toFixed(2); if (op !== lastOp) { renderer.domElement.style.opacity = op; lastOp = op; }
-        renderer.render(scene, cam);
-        if (you.current) { place(you.current, p); const pc = Math.round(cur * 100) + "%"; if (youB.textContent !== pc) youB.textContent = pc; }
-        if (top.current) place(top.current, summit.clone().add(new T.Vector3(0, .24, 0)));
-      } else t0 = now;
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => { alive = false; cancelAnimationFrame(raf); ro.disconnect(); removeEventListener("pointermove", onMove); renderer.dispose(); renderer.domElement.remove(); };
-  }, []);
-  useEffect(() => { api.current.setColor && api.current.setColor(cssVar("--ink")); }, [mode]);
-  if (!window.THREE) return null;
-  return (
-    <div className="mtn" ref={wrap}>
-      <div className="tag" ref={you}>YOU · <b>0%</b></div>
-      <div className={"tag top" + (progress >= .999 ? " win" : "")} ref={top}>{progress >= .999 ? "YOU MADE IT" : "DEBT-FREE"}</div>
-    </div>
-  );
-}
-
 /* The lone samurai (seen from behind). Poses: stand (Money), kneel (Invest, guarding), walk (Career), sit (Life, meditating). */
-function Samurai({ pose = "stand", className = "" }) {
-  const dy = pose === "sit" ? 86 : pose === "kneel" ? 56 : 0;
-  const upper = (
-    <>
-      <g className="ribbon"><path d="M140 166 C172 170 196 156 224 168 C204 176 182 186 146 178 Z" /><path d="M142 172 C166 182 184 184 206 198 C184 198 164 192 144 180 Z" opacity=".8" /></g>
-      {(pose === "stand" || pose === "walk") && <>
-        <line x1="66" y1="164" x2="-30" y2="224" stroke="currentColor" strokeWidth="7" strokeLinecap="round" />
-        <line x1="68" y1="171" x2="6" y2="208" stroke="currentColor" strokeWidth="5" strokeLinecap="round" />
-        <ellipse cx="70" cy="165" rx="4" ry="8" transform="rotate(-32 70 165)" />
-      </>}
-      <g className="sl"><path d="M58 94 Q38 102 32 134 L28 198 Q44 206 60 198 L62 122 Z" /></g>
-      <g className="sr"><path d="M142 94 Q162 102 168 134 L172 198 Q156 206 140 198 L138 122 Z" /></g>
-      <path d="M58 92 Q100 80 142 92 L150 150 Q152 172 140 176 L60 176 Q48 172 50 150 Z" />
-      <line x1="100" y1="96" x2="100" y2="160" stroke="var(--bg)" strokeWidth="1.2" opacity=".25" />
-      <rect x="54" y="158" width="92" height="13" rx="3" />
-      <line x1="54" y1="164" x2="146" y2="164" stroke="var(--bg)" strokeWidth="1" opacity=".3" />
-      <rect x="91" y="66" width="18" height="24" rx="6" />
-      <circle cx="100" cy="62" r="15" />
-      <path d="M22 62 Q100 18 178 62 Q100 74 22 62 Z" />
-      <circle cx="100" cy="30" r="3" />
-    </>
-  );
-  return (
-    <div className={"samurai pose-" + pose + " " + className} aria-hidden="true">
-      <svg viewBox={pose === "sit" ? "-40 0 300 300" : "-40 0 280 300"} fill="currentColor">
-        <ellipse cx="100" cy="294" rx={pose === "sit" ? 96 : 78} ry="6" opacity=".22" />
-        {pose === "kneel" && <g className="blade">
-          <rect x="-16" y="118" width="7" height="34" rx="2" /><ellipse cx="-12.5" cy="154" rx="10" ry="3" />
-          <path d="M-15 156 L-10 156 L-11 292 L-14 292 Z" />
-        </g>}
-        {pose === "sit" && <g><line x1="186" y1="289" x2="256" y2="284" stroke="currentColor" strokeWidth="6" strokeLinecap="round" /><line x1="190" y1="283" x2="190" y2="295" stroke="currentColor" strokeWidth="3" /></g>}
-        <g className="breath">
-          {pose === "stand" && <>
-            <path d="M60 170 L140 170 L170 292 L30 292 Z" />
-            <g stroke="var(--bg)" strokeWidth="1.4" opacity=".28"><line x1="84" y1="182" x2="72" y2="290" /><line x1="100" y1="180" x2="100" y2="290" /><line x1="116" y1="182" x2="128" y2="290" /></g>
-          </>}
-          {pose === "walk" && <>
-            <path className="leg-l" d="M60 170 L102 170 L94 292 L34 292 Z" />
-            <path className="leg-r" d="M98 170 L140 170 L164 284 L108 284 Z" />
-          </>}
-          {pose === "kneel" && <><path d={`M52 ${170 + dy} L148 ${170 + dy} L164 286 L36 286 Z`} /><ellipse cx="78" cy="288" rx="18" ry="6" /><ellipse cx="122" cy="288" rx="18" ry="6" /></>}
-          {pose === "sit" && <><path d="M-10 292 Q-12 268 18 258 Q56 246 100 248 Q144 246 182 258 Q212 268 210 292 Z" /><line x1="30" y1="272" x2="170" y2="272" stroke="var(--bg)" strokeWidth="1.2" opacity=".25" /></>}
-          <g transform={`translate(0 ${dy})`}>{upper}</g>
-        </g>
-      </svg>
-    </div>
-  );
-}
-
-function Petals() {
-  const bits = useRef(Array.from({ length: MOBILE ? 4 : 7 }, () => ({ l: 40 + Math.random() * 80, t: Math.random() * 70, s: 5 + Math.random() * 7, d: 7 + Math.random() * 8, dl: -Math.random() * 14 })));
-  if (MOTION !== "on") return null;
-  return <div className="petals" aria-hidden="true">{bits.current.map((b, i) => <i key={i} style={{ left: b.l + "%", top: b.t + "%", "--s": b.s + "px", "--d": b.d + "s", "--dl": b.dl + "s" }} />)}</div>;
-}
-
 /* ---------------- overlays ---------------- */
 function Party({ x, y, kicker, line1, line2, text, onDone }) {
   const cv = useRef(null);
@@ -350,80 +218,6 @@ function Party({ x, y, kicker, line1, line2, text, onDone }) {
 
 /* A spiral galaxy drawn on canvas: rotating arms, nebula glow, a dark core with a bright ring.
    `warp` flies you into the centre (used for the portal and the end of the loader). */
-function Galaxy({ warp = false, className = "" }) {
-  const ref = useRef(null); const warpRef = useRef(warp); warpRef.current = warp;
-  useEffect(() => {
-    const cv = ref.current; if (!cv) return;
-    const ctx = cv.getContext("2d");
-    const dpr = Math.min(MOBILE ? 1 : 1.5, devicePixelRatio || 1);
-    let W = 0, H = 0, R = 0;
-    const size = () => { W = cv.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); R = Math.hypot(W, H) * .42; };
-    size(); const ro = new ResizeObserver(size); ro.observe(cv);
-    const N = MOBILE ? 900 : 2000, ARMS = 3, cols = ["#6E7BFF", "#8F6BFF", "#B98BFF", "#FF9FD6", "#9FC4FF", "#FFFFFF"];
-    const P = Array.from({ length: N }, (_, i) => {
-      const r = Math.pow(Math.random(), .75), arm = i % ARMS;
-      const spread = (Math.random() - .5) * (.55 - r * .3);
-      return { r, t: arm / ARMS * Math.PI * 2 + r * 6.4 + spread, s: Math.random() < .08 ? 2.2 : Math.random() * 1.3 + .4,
-        c: r < .12 ? "#FFFFFF" : cols[(Math.random() * cols.length) | 0], a: .35 + Math.random() * .65 };
-    });
-    const bg = Array.from({ length: MOBILE ? 120 : 260 }, () => ({ x: Math.random(), y: Math.random(), s: Math.random() * 1.2 + .2, p: Math.random() * 6 }));
-    // nebula texture, painted once
-    const neb = document.createElement("canvas"), NS = 512; neb.width = neb.height = NS;
-    const nx = neb.getContext("2d");
-    for (let i = 0; i < 70; i++) {
-      const r = Math.random(), arm = i % ARMS, t = arm / ARMS * Math.PI * 2 + r * 5.2;
-      const x = NS / 2 + Math.cos(t + r * 1.2) * r * NS * .45, y = NS / 2 + Math.sin(t) * r * NS * .45, rad = 30 + Math.random() * 60;
-      const g = nx.createRadialGradient(x, y, 0, x, y, rad), c = ["120,90,255", "80,110,255", "255,140,210", "160,120,255"][i % 4];
-      g.addColorStop(0, `rgba(${c},.22)`); g.addColorStop(1, `rgba(${c},0)`); nx.fillStyle = g; nx.fillRect(0, 0, NS, NS);
-    }
-    let raf, prev = performance.now(), rot = 0, zoom = 1.55, alive = true, on = true;
-    const io = new IntersectionObserver(([e]) => { on = e.isIntersecting; if (on && !raf) { prev = performance.now(); raf = requestAnimationFrame(draw); } }); io.observe(cv);
-    function draw(now) {
-      if (!alive || !on || document.hidden) { raf = 0; return; }
-      const dt = Math.min(50, now - prev) / 1000; prev = now;
-      const w = warpRef.current;
-      rot += dt * (w ? 1.4 : REDUCE ? 0 : .12);
-      zoom += ((w ? 5 : 1.55) - zoom) * Math.min(1, dt * (w ? 1.6 : 3));
-      const cx = W / 2, cy = H / 2, tilt = .62;
-      ctx.globalCompositeOperation = "source-over";
-      const bgG = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * .8);
-      bgG.addColorStop(0, "#1A1446"); bgG.addColorStop(.45, "#0B0A24"); bgG.addColorStop(1, "#03030B");
-      ctx.fillStyle = bgG; ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = "lighter";
-      bg.forEach(b => { // far stars; streak outward when warping
-        const tw = .45 + .55 * Math.sin(now / 900 + b.p);
-        const dx = (b.x - .5) * W, dy = (b.y - .5) * H, k = w ? 1 + (zoom - 1) * .35 : 1;
-        ctx.fillStyle = `rgba(210,220,255,${.5 * tw})`;
-        if (w) { ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = b.s; ctx.beginPath(); ctx.moveTo(cx + dx, cy + dy); ctx.lineTo(cx + dx * k, cy + dy * k); ctx.stroke(); }
-        else ctx.fillRect(cx + dx, cy + dy, b.s, b.s);
-      });
-      ctx.save(); ctx.translate(cx, cy); ctx.scale(zoom, zoom * tilt); ctx.rotate(rot);
-      ctx.drawImage(neb, -R, -R, R * 2, R * 2); ctx.restore();
-      for (let i = 0; i < N; i++) {
-        const p = P[i], t = p.t + rot * (1.6 - p.r), rr = p.r * R * zoom;
-        const x = cx + Math.cos(t) * rr, y = cy + Math.sin(t) * rr * tilt;
-        if (x < -4 || y < -4 || x > W + 4 || y > H + 4) continue;
-        ctx.globalAlpha = p.a; ctx.fillStyle = p.c; const s = p.s * (w ? Math.min(3, zoom * .8) : 1); ctx.fillRect(x, y, s, s);
-      }
-      ctx.globalAlpha = 1;
-      // core glow, then the dark centre with its bright ring
-      const cr = R * .09 * zoom;
-      const glow = ctx.createRadialGradient(cx, cy, cr * .6, cx, cy, cr * 4);
-      glow.addColorStop(0, "rgba(255,230,255,.55)"); glow.addColorStop(.35, "rgba(170,130,255,.25)"); glow.addColorStop(1, "rgba(80,60,200,0)");
-      ctx.fillStyle = glow; ctx.beginPath(); ctx.ellipse(cx, cy, cr * 4, cr * 4 * tilt, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.globalCompositeOperation = "source-over";
-      ctx.fillStyle = "#020208"; ctx.beginPath(); ctx.ellipse(cx, cy, cr, cr * .82, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.shadowColor = "rgba(210,170,255,.9)"; ctx.shadowBlur = cr * .5; ctx.strokeStyle = "rgba(255,230,255,.9)"; ctx.lineWidth = Math.max(1.5, cr * .16);
-      ctx.beginPath(); ctx.ellipse(cx, cy, cr * 1.08, cr * .9, rot * .5, Math.PI * .1, Math.PI * 1.5); ctx.stroke(); ctx.shadowBlur = 0;
-      raf = requestAnimationFrame(draw);
-    }
-    raf = requestAnimationFrame(draw);
-    return () => { alive = false; cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); };
-  }, []);
-  return <canvas ref={ref} className={"galaxy " + className} aria-hidden="true" />;
-}
-
 function Loader({ ready, onDone, jdm }) {
   const [n, setN] = useState(0); const [out, setOut] = useState(false);
   const readyRef = useRef(ready); readyRef.current = ready;
@@ -446,38 +240,6 @@ function Loader({ ready, onDone, jdm }) {
       <div className="ug-lnum">{String(n).padStart(3, "0")}<small>%</small></div>
     </div>
   );
-  return (
-    <div className={"loader gx" + (out ? " out" : "")}>
-      <Galaxy warp={out} />
-      <div className="gx-word"><span className="sig ar" style={{ fontFamily: '"Aref Ruqaa", serif' }}>{meAr()}</span><span className="caps">Loading your climb</span></div>
-      <div className="gx-count num">{String(n).padStart(3, "0")}</div>
-      <div className="bar" style={{ width: n + "%" }} />
-    </div>
-  );
-}
-
-function Cursor() {
-  const d = useRef(null), r = useRef(null);
-  useEffect(() => {
-    if (!matchMedia("(pointer:fine)").matches || MOTION !== "on") return;
-    let x = innerWidth / 2, y = innerHeight / 2, rx = x, ry = y, raf;
-    const mv = e => { x = e.clientX; y = e.clientY; const hot = e.target.closest && e.target.closest("button,a,input,select"); r.current && r.current.classList.toggle("big", !!hot); };
-    addEventListener("pointermove", mv);
-    const loop = () => { rx += (x - rx) * .18; ry += (y - ry) * .18; if (d.current) d.current.style.transform = `translate(${x}px,${y}px)`; if (r.current) r.current.style.transform = `translate(${rx}px,${ry}px)`; raf = requestAnimationFrame(loop); };
-    loop(); return () => { removeEventListener("pointermove", mv); cancelAnimationFrame(raf); };
-  }, []);
-  return <><div className="cur" ref={d} /><div className="cur-r" ref={r} /></>;
-}
-
-function useMagnet() {
-  useEffect(() => {
-    if (!matchMedia("(pointer:fine)").matches) return;
-    const mv = e => document.querySelectorAll(".cta,.mono").forEach(el => {
-      const b = el.getBoundingClientRect(), dx = e.clientX - (b.left + b.width / 2), dy = e.clientY - (b.top + b.height / 2);
-      el.style.translate = Math.hypot(dx, dy) < 90 ? `${dx * .25}px ${dy * .3}px` : "0 0";
-    });
-    addEventListener("pointermove", mv); return () => removeEventListener("pointermove", mv);
-  }, []);
 }
 
 /* number pad sheet, used for spending and pot balances */
@@ -621,225 +383,6 @@ function Urge({ left, streak, beaten, onClose, onBeaten, onTalk }) {
 }
 
 
-
-/* ================= SPACE: starfield background + realistic procedural planets (Three.js r128) ================= */
-
-/* Real planet maps: Solar System Scope (CC BY 4.0, NASA-based), served by Wikimedia Commons. HD = the 8k map scaled to 3840 px. */
-const WM = (h, f) => `https://upload.wikimedia.org/wikipedia/commons/${h}/Solarsystemscope_texture_${f}`;
-const HD = (h, f) => `https://upload.wikimedia.org/wikipedia/commons/thumb/${h}/Solarsystemscope_texture_${f}/3840px-Solarsystemscope_texture_${f}`;
-
-/* Deep-space background: drawn once, fixed behind everything (no battery cost while scrolling). */
-function SpaceBg() {
-  const ref = useRef(null);
-  useEffect(() => {
-    const cv = ref.current; if (!cv) return;
-    const paint = () => {
-      const dpr = Math.min(2, devicePixelRatio || 1), W = innerWidth, H = Math.max(innerHeight, screen.height || 0);
-      cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + "px";
-      const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#04050D"); g.addColorStop(1, "#070714"); c.fillStyle = g; c.fillRect(0, 0, W, H);
-      const neb = (x, y, r, col, a) => { const n = c.createRadialGradient(x, y, 0, x, y, r); n.addColorStop(0, `rgba(${col},${a})`); n.addColorStop(1, `rgba(${col},0)`); c.fillStyle = n; c.fillRect(0, 0, W, H); };
-      if (sky.complete && sky.naturalWidth) { const sc = Math.max(W / sky.naturalWidth, H / sky.naturalHeight) * 1.1; c.globalAlpha = .75; c.drawImage(sky, (W - sky.naturalWidth * sc) / 2, (H - sky.naturalHeight * sc) / 2, sky.naturalWidth * sc, sky.naturalHeight * sc); c.globalAlpha = 1; }
-      neb(W * .15, H * .2, W * .7, "90,70,200", .16); neb(W * .9, H * .55, W * .6, "40,90,200", .12); neb(W * .5, H * 1, W * .8, "150,60,160", .08);
-      let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-      const n = Math.round(W * H / 900);
-      for (let i = 0; i < n; i++) {
-        const x = rnd() * W, y = rnd() * H, big = rnd() < .012, s = big ? 1.3 + rnd() * .6 : .3 + rnd() * .8;
-        const hue = rnd(); c.fillStyle = hue < .15 ? "rgba(170,190,255," : hue < .25 ? "rgba(255,220,190," : "rgba(235,238,255,";
-        c.fillStyle += (big ? .95 : .25 + rnd() * .6) + ")";
-        c.beginPath(); c.arc(x, y, s / 2 + .2, 0, 7); c.fill();
-        if (big) { const gl = c.createRadialGradient(x, y, 0, x, y, s * 3); gl.addColorStop(0, "rgba(200,210,255,.22)"); gl.addColorStop(1, "rgba(200,210,255,0)"); c.fillStyle = gl; c.fillRect(x - s * 3, y - s * 3, s * 6, s * 6); }
-      }
-    };
-    const sky = new Image(); sky.onload = () => paint(); sky.src = WM("0/0e", "2k_stars_milky_way.jpg");
-    paint(); let t; const on = () => { clearTimeout(t); t = setTimeout(paint, 250); };
-    addEventListener("resize", on); return () => removeEventListener("resize", on);
-  }, []);
-  return <canvas ref={ref} className="space-bg" aria-hidden="true" />;
-}
-
-const GLSL_NOISE = `
-vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}
-vec4 permute(vec4 x){return mod289(((x*34.)+1.)*x);}vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-.85373472095314*r;}
-float snoise(vec3 v){const vec2 C=vec2(1./6.,1./3.);const vec4 D=vec4(0.,.5,1.,2.);vec3 i=floor(v+dot(v,C.yyy));vec3 x0=v-i+dot(i,C.xxx);
-vec3 g=step(x0.yzx,x0.xyz);vec3 l=1.-g;vec3 i1=min(g.xyz,l.zxy);vec3 i2=max(g.xyz,l.zxy);vec3 x1=x0-i1+C.xxx;vec3 x2=x0-i2+C.yyy;vec3 x3=x0-D.yyy;
-i=mod289(i);vec4 p=permute(permute(permute(i.z+vec4(0.,i1.z,i2.z,1.))+i.y+vec4(0.,i1.y,i2.y,1.))+i.x+vec4(0.,i1.x,i2.x,1.));
-float n_=.142857142857;vec3 ns=n_*D.wyz-D.xzx;vec4 j=p-49.*floor(p*ns.z*ns.z);vec4 x_=floor(j*ns.z);vec4 y_=floor(j-7.*x_);
-vec4 x=x_*ns.x+ns.yyyy;vec4 y=y_*ns.x+ns.yyyy;vec4 h=1.-abs(x)-abs(y);vec4 b0=vec4(x.xy,y.xy);vec4 b1=vec4(x.zw,y.zw);
-vec4 s0=floor(b0)*2.+1.;vec4 s1=floor(b1)*2.+1.;vec4 sh=-step(h,vec4(0.));vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
-vec3 p0=vec3(a0.xy,h.x);vec3 p1=vec3(a0.zw,h.y);vec3 p2=vec3(a1.xy,h.z);vec3 p3=vec3(a1.zw,h.w);
-vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
-vec4 m=max(.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.);m=m*m;return 42.*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));}
-float fbm(vec3 p){float f=0.,a=.5;for(int i=0;i<6;i++){f+=a*snoise(p);p*=2.03;a*=.5;}return f;}
-`;
-/* Planets are drawn with a single full-screen shader (ray–sphere maths per pixel): no 3D library, no images,
-   works offline. kind: "earth-horizon" (Money), "giant" (Invest), "mars" (Career), "ocean" (Life). */
-const PLANET_FS = `#extension GL_OES_standard_derivatives : enable
-precision highp float;
-uniform sampler2D uT0;uniform sampler2D uT1;uniform sampler2D uT2;uniform sampler2D uT3;uniform vec4 uHas;
-uniform vec2 uRes;uniform float uTime;uniform float uKind;uniform vec2 uC;uniform float uR;uniform vec3 uL;uniform float uTilt;uniform float uSpin;
-uniform vec3 uSun;uniform float uLevel;uniform float uMarks[8];uniform float uMarkN;uniform float uOct;
-${GLSL_NOISE}
-float fbmN(vec3 p){float f=0.,a=.5;for(int i=0;i<6;i++){if(float(i)>=uOct)break;f+=a*snoise(p);p*=2.03;a*=.5;}return f;}
-vec3 rotX(vec3 v,float a){float c=cos(a),s=sin(a);return vec3(v.x,c*v.y-s*v.z,s*v.y+c*v.z);}
-vec3 rotY(vec3 v,float a){float c=cos(a),s=sin(a);return vec3(c*v.x+s*v.z,v.y,-s*v.x+c*v.z);}
-vec3 atmCol(){return uKind<.5?vec3(.35,.62,1.):uKind<1.5?vec3(1.,.8,.52):uKind<2.5?vec3(1.,.55,.38):vec3(.35,.88,1.);}
-vec2 eq(vec3 p){float u1=fract(atan(p.z,p.x)/6.2832+.5);float u2=fract(u1+.5)-.5;float u=fwidth(u1)<fwidth(u2)+.0001?u1:u2;return vec2(u,.5-asin(clamp(p.y,-1.,1.))/3.14159);}
-vec3 surf(vec3 p,vec3 N,vec3 L){
-  if(uHas.x>.5){ // real surface maps
-    vec2 st=eq(p);float dl=dot(N,L);float day=smoothstep(-.1,.3,dl);vec3 V=vec3(0.,0.,1.);
-    vec3 col=texture2D(uT0,st).rgb;col=pow(col,vec3(1.08));vec3 lit=col*(day*1.25+.015);
-    if(uKind<.5){
-      float water=smoothstep(.02,.12,col.b-max(col.r,col.g)*.9);lit+=water*pow(max(dot(reflect(-L,N),V),0.),28.)*.7*day;
-      if(uHas.y>.5){vec3 nl=texture2D(uT1,st).rgb;lit+=nl*vec3(1.,.82,.6)*1.5*(1.-smoothstep(-.08,.12,dl));}
-      if(uHas.z>.5){float c=texture2D(uT2,eq(rotY(p,uTime*.004))).r;lit=mix(lit,vec3(1.)*(day*1.05+.015),smoothstep(.15,.9,c)*.85);}
-    }
-    float rim=pow(1.-max(N.z,0.),2.5);lit+=atmCol()*rim*smoothstep(-.35,.45,dl)*1.1;return lit;
-  }
-  float dl=dot(N,L);float day=smoothstep(-.1,.32,dl);vec3 col;float spec=0.;vec3 night=vec3(0.);vec3 V=vec3(0.,0.,1.);
-  if(uKind<.5){
-    float h=fbmN(p*1.7+vec3(3.1,1.7,.4));float lat=abs(p.y);float land=smoothstep(.04,.09,h);
-    vec3 ocean=mix(vec3(.015,.06,.18),vec3(.05,.24,.46),smoothstep(-.25,.06,h));
-    float dry=smoothstep(.1,.45,fbmN(p*3.2+9.)+(1.-lat)*.3);
-    vec3 g=mix(vec3(.12,.26,.09),vec3(.56,.46,.29),dry);g=mix(g,vec3(.35,.31,.26),smoothstep(.28,.45,h));
-    col=mix(ocean,g,land);col=mix(col,vec3(.93,.96,1.),smoothstep(.8,.88,lat+snoise(p*6.)*.04));
-    spec=(1.-land)*pow(max(dot(reflect(-L,N),V),0.),30.)*.8;
-    float city=smoothstep(.5,.8,snoise(p*70.))*smoothstep(.2,.6,snoise(p*8.+2.))*land*(1.-smoothstep(.72,.8,lat));
-    night=vec3(1.,.7,.35)*city*1.8;
-  } else if(uKind<1.5){
-    float w=fbmN(p*vec3(1.2,5.,1.2)+vec3(0.,0.,uTime*.01));float b=sin(p.y*15.+w*1.3);float b2=sin(p.y*40.+w*2.);
-    col=mix(vec3(.87,.73,.51),vec3(.62,.42,.24),smoothstep(-.6,.6,b));col=mix(col,vec3(.96,.9,.76),smoothstep(.5,1.,b2)*.5);col=mix(col,vec3(.44,.27,.15),smoothstep(.55,.9,-b)*.45);
-    vec2 sp=vec2(atan(p.z,p.x)-.9,p.y+.3);col=mix(col,vec3(.74,.34,.18),smoothstep(.13,0.,length(sp*vec2(1.,2.3)))*.85);
-  } else if(uKind<2.5){
-    float h=fbmN(p*2.3+5.);float cr=smoothstep(.6,.66,abs(snoise(p*7.)));
-    col=mix(vec3(.42,.16,.07),vec3(.8,.44,.23),smoothstep(-.3,.4,h));col=mix(col,vec3(.28,.11,.06),smoothstep(.25,.6,fbmN(p*5.+1.)));
-    col*=1.-cr*.18;col=mix(col,vec3(.95,.93,.9),smoothstep(.9,.95,abs(p.y)+snoise(p*8.)*.03));
-  } else {
-    float h=fbmN(p*2.1+11.);float land=smoothstep(.24,.29,h);
-    col=mix(mix(vec3(.01,.1,.18),vec3(.05,.42,.52),smoothstep(-.3,.2,h)),vec3(.3,.35,.22),land);
-    spec=(1.-land)*pow(max(dot(reflect(-L,N),V),0.),40.)*1.1;
-  }
-  vec3 lit=col*(day*1.2+.02)+spec*day+night*(1.-smoothstep(-.06,.1,dl));
-  if(uKind<.5||uKind>2.5){ // clouds
-    vec3 q=rotY(p,uTime*.004);float c=smoothstep(uKind>2.5?.0:.12,.6,fbmN(q*2.5+vec3(uTime*.01,0.,0.)));
-    lit=mix(lit,vec3(1.)*(day*1.05+.02),c*.8);
-  }
-  float rim=pow(1.-max(N.z,0.),2.5);lit+=atmCol()*rim*smoothstep(-.35,.45,dl)*1.1;
-  return lit;
-}
-void main(){
-  vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y;vec2 d=(uv-uC)/uR;float r2=dot(d,d);
-  vec3 L=normalize(uL);vec3 col=vec3(0.);float a=0.;float pz=-9.;
-  if(r2<1.){pz=sqrt(1.-r2);vec3 N=vec3(d,pz);vec3 p=rotY(rotX(N,uTilt),uSpin);col=surf(p,N,L);a=1.;}
-  else{ // atmosphere haze beyond the edge
-    float r=sqrt(r2);float h=uKind<.5?.035:.09;float g=exp(-(r-1.)/h*2.2)*smoothstep(-.5,.6,dot(normalize(vec3(d,0.)),L)+.25);
-    vec3 c=atmCol()*g*.9;col+=c;a=max(a,min(1.,g*.9));
-  }
-  vec3 Nr=rotX(vec3(0.,1.,0.),-uTilt);
-  if(uKind>.5&&uKind<1.5){ // rings
-    float z=-(d.x*Nr.x+d.y*Nr.y)/Nr.z;vec3 q=vec3(d,z);float r=length(q);float t=(r-1.45)/.9;
-    if(t>0.&&t<1.&&(r2>=1.||z>pz)){
-      float band=.55+.45*sin(t*85.+snoise(vec3(t*18.,1.,1.))*3.);float gap=smoothstep(.025,0.,abs(t-.62));
-      float ra=band*(1.-gap*.9)*smoothstep(0.,.06,t)*smoothstep(1.,.9,t)*.8;
-      vec4 rt=texture2D(uT3,vec2(t,.5));if(uHas.w>.5)ra=rt.a*.95;
-      float sh=(dot(q,L)<0.&&length(q-dot(q,L)*L)<1.)?.25:1.;
-      vec3 rc=(uHas.w>.5?rt.rgb:mix(vec3(.86,.76,.58),vec3(.6,.5,.38),t))*(.35+.8*max(dot(Nr,L)*sign(dot(Nr,vec3(0.,0.,1.))),.25))*sh;
-      col=mix(col,rc,ra);a=max(a,ra);
-    }
-  }
-  if(uKind>1.5&&uKind<2.5){ // orbit with checkpoints
-    float z=-(d.x*Nr.x+d.y*Nr.y)/Nr.z;vec3 q=vec3(d,z);float r=length(q);float px=1.6/(uR*uRes.y);
-    if(abs(r-2.1)<px&&(r2>=1.||z>pz)){float la=.32;col=mix(col,vec3(.62,.64,.85),la);a=max(a,la);}
-    for(int i=0;i<8;i++){if(float(i)>=uMarkN)break;
-      float an=float(i)/uMarkN*6.2832+uTime*.05;vec3 m=rotX(vec3(cos(an)*2.1,0.,sin(an)*2.1),-uTilt);
-      float st=uMarks[i];float mr=st>1.5?.1+.02*sin(uTime*3.):.07;float dd=length(d-m.xy);
-      if(dd<mr&&(r2>=1.||m.z>pz)){vec3 mc=st>1.5?vec3(.75,.68,1.):st>.5?vec3(.95,.96,1.):vec3(.25,.27,.42);col=mc;a=1.;}
-      else if(st>1.5&&dd<mr*3.){float gg=exp(-dd/mr*1.4)*.6;col+=vec3(.6,.5,1.)*gg;a=max(a,gg);}
-    }
-  }
-  if(uKind>.5&&uKind<1.5){ // moons, one per level
-    for(int i=0;i<8;i++){if(float(i)>=uLevel)break;
-      float ro=2.7+float(i)*.34;float an=uTime*(.3/(1.+float(i)*.4))+float(i)*1.9;vec3 m=rotX(vec3(cos(an)*ro,0.,sin(an)*ro),-uTilt);
-      float mr=.07+float(i)*.012;vec2 dm=(d-m.xy)/mr;float mm=dot(dm,dm);
-      if(mm<1.&&(r2>=1.||m.z>pz)){vec3 mn=vec3(dm,sqrt(1.-mm));float sh=smoothstep(-.1,.3,dot(mn,L));
-        col=vec3(.62,.6,.58)*(1.-.25*smoothstep(.3,.7,snoise(vec3(dm*3.,float(i)))))*(sh*1.1+.03);a=1.;}
-    }
-  }
-  if(uSun.z>0.){ // a star glowing behind the planet
-    float sd=length(uv-uSun.xy);float g=uSun.z*(exp(-sd*28.)*1.2+exp(-sd*6.)*.35+exp(-sd*2.)*.1);
-    vec3 sc=vec3(1.,.9,.78)*g;
-    if(r2<1.){float limb=smoothstep(.75,1.,sqrt(r2))*exp(-length(uv-uSun.xy)*4.)*uSun.z;col+=vec3(1.,.8,.6)*limb*.9;}
-    else{col+=sc;a=max(a,min(1.,g));}
-  }
-  gl_FragColor=vec4(col,a);
-}`;
-const PLANET_VS = `attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
-
-function Planet3D({ kind, level = 0, progress = 0, marks = [], sun = 0 }) {
-  const ref = useRef(null); const live = useRef({}); live.current = { level, progress, marks, sun };
-  useEffect(() => {
-    const cv = ref.current; if (!cv) return;
-    const gl = cv.getContext("webgl", { alpha: true, premultipliedAlpha: true, antialias: false, powerPreference: "low-power" });
-    if (!gl) return;
-    gl.getExtension("OES_standard_derivatives");
-    const sh = (t, src) => { const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.warn(gl.getShaderInfoLog(s)); } return s; };
-    const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, PLANET_VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, PLANET_FS)); gl.linkProgram(pr);
-    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) { console.warn(gl.getProgramInfoLog(pr)); return; }
-    gl.useProgram(pr);
-    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const U = n => gl.getUniformLocation(pr, n);
-    const u = { res: U("uRes"), time: U("uTime"), kind: U("uKind"), c: U("uC"), r: U("uR"), l: U("uL"), tilt: U("uTilt"), spin: U("uSpin"), sun: U("uSun"), level: U("uLevel"), marks: U("uMarks[0]"), markN: U("uMarkN"), oct: U("uOct") };
-    const k = { "earth-horizon": 0, giant: 1, mars: 2, ocean: 3 }[kind] ?? 0;
-    const scale = Math.min(MOBILE ? 1.5 : 2, devicePixelRatio || 1); // sharp on phones and retina screens
-    let W = 0, H = 0, asp = 1;
-    const size = () => { W = Math.max(1, Math.round(cv.clientWidth * scale)); H = Math.max(1, Math.round(cv.clientHeight * scale)); cv.width = W; cv.height = H; gl.viewport(0, 0, W, H); asp = W / H; };
-    size(); const ro = new ResizeObserver(size); ro.observe(cv);
-    gl.uniform1f(u.kind, k); gl.uniform1f(u.oct, 6);
-    // Real maps (optional): drop Solar System Scope 2k files into /textures and they're used automatically.
-    const has = [0, 0, 0, 0];
-    const MAPS = { 0: [HD("0/04", "8k_earth_daymap.jpg"), MOBILE ? WM("2/2f", "2k_earth_nightmap.jpg") : HD("b/b3", "8k_earth_nightmap.jpg"), MOBILE ? WM("e/ed", "2k_earth_clouds.jpg") : HD("7/7a", "8k_earth_clouds.jpg")],
-      1: [WM("e/ea", "2k_saturn.jpg"), null, null, WM("7/7d", "2k_saturn_ring_alpha.png")], 2: [WM("4/46", "2k_mars.jpg")], 3: [WM("1/1e", "2k_neptune.jpg")] }[k] || [];
-    [0, 1, 2, 3].forEach(i => { gl.uniform1i(U("uT" + i), i); const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
-      const f = MAPS[i]; if (!f) return;
-      const img = new Image(); img.crossOrigin = "anonymous";
-      img.onload = () => { if (gl.isContextLost()) return; gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        const pot = (img.width & (img.width - 1)) === 0 && (img.height & (img.height - 1)) === 0;
-        if (pot) { gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); } else gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, pot ? gl.REPEAT : gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        const e = gl.getExtension("EXT_texture_filter_anisotropic"); if (e) gl.texParameterf(gl.TEXTURE_2D, e.TEXTURE_MAX_ANISOTROPY_EXT, 4);
-        has[i] = 1; };
-      img.src = f; });
-    const uHas = U("uHas");
-    let raf, on = true, t0 = performance.now(), sunY = null, spinT = 0, prev = t0;
-    const io = new IntersectionObserver(([e]) => { on = e.isIntersecting; if (on && !raf) { prev = performance.now(); raf = requestAnimationFrame(loop); } }); io.observe(cv);
-    const speed = REDUCE ? 0 : CALM ? .5 : 1;
-    function loop(now) {
-      if (!on || document.hidden) { raf = 0; return; }
-      if (MOBILE && now - prev < 30) { raf = requestAnimationFrame(loop); return; }
-      const dt = Math.min(.05, (now - prev) / 1000); prev = now; spinT += dt * speed;
-      const { level: lv, progress: pg, marks: mk, sun: sn } = live.current;
-      const narrow = asp < .8, hw = asp / 2;
-      let cx = 0, cy = 0, R = .2, tilt = .35, L = [-.7, .35, .6], sun = [0, 0, 0];
-      if (k === 0) { // the real Earth; daylight spreads across it as you clear your debt (night side = city lights)
-        R = narrow ? .22 : .3; cx = narrow ? 0 : hw * .42; cy = narrow ? .13 : .06; tilt = .35;
-        const ta = -2.25 + Math.min(1, pg) * 1.75; sunY = sunY == null ? ta : sunY + (ta - sunY) * .04;
-        L = [Math.sin(sunY), .3, Math.cos(sunY)]; }
-      else if (k === 1) { R = narrow ? .13 : .16; cx = narrow ? 0 : hw * .42; cy = .14; tilt = .42; }
-      else if (k === 2) { R = narrow ? .15 : .19; cx = narrow ? 0 : hw * .42; cy = .14; tilt = .3; }
-      else { R = narrow ? .16 : .19; cx = narrow ? 0 : hw * .42; cy = .12; tilt = .25; const sy = cy - R * .9 + sn * R * 2.2; sun = [cx - R * .55, sy, 1]; L = [-.6, (sy - cy) / R * .9, -.05]; }
-      gl.uniform2f(u.res, W, H); gl.uniform1f(u.time, spinT); gl.uniform2f(u.c, cx, cy); gl.uniform1f(u.r, R);
-      gl.uniform3f(u.l, L[0], L[1], L[2]); gl.uniform1f(u.tilt, tilt); gl.uniform1f(u.spin, spinT * .035); gl.uniform3f(u.sun, sun[0], sun[1], sun[2]);
-      gl.uniform1f(u.level, Math.min(8, lv || 0)); gl.uniform4f(uHas, has[0], has[1], has[2], has[3]);
-      const m = new Float32Array(8); (mk || []).slice(0, 8).forEach((v, i) => m[i] = v); gl.uniform1fv(u.marks, m); gl.uniform1f(u.markN, Math.min(8, (mk || []).length));
-      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);
-      raf = requestAnimationFrame(loop);
-    }
-    raf = requestAnimationFrame(loop);
-    return () => { on = false; cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); const x = gl.getExtension("WEBGL_lose_context"); x && x.loseContext(); };
-  }, [kind]);
-  return <div className={"planet3d pk-" + kind}><canvas ref={ref} /></div>;
-}
 /* pinned sideways stages */
 function Stages({ currentIdx }) {
   const sec = useRef(null), track = useRef(null), bar = useRef(null);
@@ -1163,6 +706,7 @@ function SettingsSheet({ settings, state, onClose, act, onExport, telegramTest }
         <p className="mute small">One message at 8pm when something is coming up: bills, payday, dated to-dos and milestones. Set up with TELEGRAM-GUIDE.md.</p>
         <button className="chip-btn" onClick={async () => { setTg("Sending…"); setTg(await telegramTest()); }}>Send a test message</button> <span className="mute small">{tg}</span>
       </div>
+      <LockSettings />
       <div className="box">
         <div className="caps mute">Backup</div>
         <p className="mute small">Download everything once a month and keep it in Google Drive. Supabase's free plan doesn't back up for you.</p>
@@ -1301,55 +845,6 @@ const areaOf = x => x.area || (/invest|stashaway|ibkr|syfe/i.test(x.title) ? "in
   : /ippt|broker|trading|kept the|parent|mum|dad|hajj|friend|wedding|bto/i.test(x.title) ? "life" : "money");
 
 /* ---------- world switcher ---------- */
-function Dock({ world, onGo, onHome }) {
-  return (
-    <nav className="dock" aria-label="Worlds">
-      {onHome && <button className="dock-b dock-home" aria-label="Garage: pick a stage" onClick={onHome}><span className="dg" aria-hidden="true">⌂</span><span className="dl">Home</span></button>}
-      {WORLDS.map(w => (
-        <button key={w.id} className={"dock-b" + (world === w.id ? " on" : "")} aria-current={world === w.id ? "page" : undefined}
-          onClick={e => { if (world !== w.id) { const b = e.currentTarget.getBoundingClientRect(); onGo(w.id, b.left + b.width / 2, b.top + b.height / 2); } }}>
-          <span className="dg" aria-hidden="true">{w.glyph}</span><span className="dl">{w.name}</span>
-        </button>
-      ))}
-    </nav>
-  );
-}
-
-/* ---------- portal between worlds ---------- */
-function Portal({ to, x, y, onMid, onDone }) {
-  const w = worldOf(to);
-  const [ph, setPh] = useState("in");
-  useEffect(() => {
-    const inT = REDUCE ? 0 : CALM ? 420 : 620, hold = REDUCE ? 0 : CALM ? 520 : 800, outT = REDUCE ? 0 : CALM ? 420 : 620;
-    const t1 = setTimeout(() => { onMid(); setPh("hold"); }, inT);
-    const t2 = setTimeout(() => setPh("out"), inT + hold);
-    const t3 = setTimeout(onDone, inT + hold + outT);
-    Sound.tone(220, .5, "sine", .04); Sound.tone(330, .6, "sine", .03, .12);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, []);
-  return (
-    <div className={"portal p-" + ph + " pw-" + to} style={{ "--px": x + "px", "--py": y + "px" }} aria-hidden="true">
-      <Galaxy warp={ph !== "in"} />
-      <div className="portal-t"><span className="caps">Entering</span><b>{w.name}</b><em>{w.sub}</em></div>
-    </div>
-  );
-}
-
-/* ---------- shared bits ---------- */
-function WHero({ kicker, title, sub, children, cls, marq }) {
-  return null; // v11: the stage bar replaces the big world hero
-  return (
-    <header className={"w-hero " + (cls || "")}>
-      <Marquee className="m1" items={[marq, meAr(), marq, meEn()]} dir={1} speed={.18} />
-      {children}
-      <div className="w-hero-t wrap">
-        <div className="caps w-kick">{kicker}</div>
-        <h1>{title}</h1>
-        {sub && <p>{sub}</p>}
-      </div>
-    </header>
-  );
-}
 const prevKey = k => { const [y, m] = k.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
 
 /* ================= INVEST: The Grove ================= */
@@ -1370,35 +865,6 @@ function investInfo(d, today) {
   let li = 0; LEVELS.forEach((l, i) => { if (n >= l.at) li = i; });
   const next = LEVELS[li + 1] || null;
   return { pot, moves, planted, n, streak, thisMonth: months.has(now), li, level: LEVELS[li], next, toNext: next ? next.at - n : 0, pct: next ? (n - LEVELS[li].at) / (next.at - LEVELS[li].at) * 100 : 100 };
-}
-function Stairs({ path, nextP }) {
-  const steps = path.slice(0, 7);
-  const at = Math.max(0, nextP ? steps.findIndex(m => m.id === nextP.id) : steps.length - 1);
-  const n = Math.max(steps.length, 1);
-  return (
-    <div className="scene sc-career" aria-hidden="true">
-      <div className="stairs">
-        <div className="walker" style={{ left: `calc(${(at + .5) / n * 100}% - 36px)`, bottom: `${at / n * 62 + 14}%` }}><Samurai pose="walk" /></div>
-        {steps.map((m, i) => <div key={m.id} className={"step" + (m.done ? " done" : "") + (i === at ? " at" : "")} style={{ left: (i / n * 100) + "%", bottom: (i / n * 62) + "%", width: (100 / n) + "%" }}><span>{m.title.replace(/ passed| started|Started an |Applied to |Applied for /gi, "").slice(0, 18)}</span></div>)}
-      </div>
-    </div>
-  );
-}
-function Tree({ li }) {
-  const s = .45 + li * .08;             // grows with level
-  const leaves = [[0, -70, 38], [-34, -48, 28], [34, -48, 28], [-20, -92, 24], [22, -94, 24], [0, -118, 20], [-50, -76, 18], [50, -76, 18]].slice(0, Math.max(0, li + 1));
-  return (
-    <svg className="tree" viewBox="-120 -170 240 190" aria-hidden="true">
-      <ellipse cx="0" cy="12" rx="110" ry="10" className="t-ground" />
-      <g style={{ transform: `scale(${s})`, transformOrigin: "0 10px", transition: "transform 1.2s cubic-bezier(.2,1.2,.3,1)" }}>
-        {li === 0 ? <ellipse cx="0" cy="0" rx="12" ry="9" className="t-seed" /> : <>
-          <path d="M-6 10 C-5 -20,-4 -40,0 -60 C4 -40,5 -20,6 10 Z" className="t-trunk" />
-          {li >= 3 && <path d="M0 -38 C-14 -46,-24 -52,-32 -60 M0 -46 C12 -54,22 -58,30 -64" className="t-branch" />}
-          {leaves.map(([x, y, r], i) => <circle key={i} cx={x} cy={y} r={r} className="t-leaf" style={{ animationDelay: i * .12 + "s" }} />)}
-        </>}
-      </g>
-    </svg>
-  );
 }
 const BADGES = [
   { t: "First launch", ok: i => i.n >= 1 }, { t: "3 in a row", ok: i => i.streak >= 3 }, { t: "6 in a row", ok: i => i.streak >= 6 },
@@ -1422,11 +888,6 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
   const val = settings.investValue;
   return (
     <>
-      <WHero cls="h-invest" marq="ORBIT" kicker={`Level ${inv.li + 1} · ${inv.level.name}`} title={inv.n ? `${inv.n} month${inv.n === 1 ? "" : "s"} invested` : open ? "Launch your first month" : "Orbit opens soon"}
-        sub={inv.n ? `${inv.streak} in a row · ${fmt(inv.planted)} invested · a new moon every level` : open ? `${fmt(monthly)} a month. Automatic. Then leave it alone.` : `Opens ${monthLong(ym(start))}. Clear the path first.`}>
-        <Planet3D kind="giant" level={inv.li} />
-        <div className="lvl-pill caps"><i />Level {inv.li + 1} · {inv.level.name}</div>
-      </WHero>
       <main>
         <section className="block wrap" id="grove">
           <div className="sechead"><Scramble text="THIS MONTH" /><span className="idx">you level up by<br />showing up, not by prices</span></div>
@@ -1484,11 +945,6 @@ const EMPLOYERS = [
   ["Critical infrastructure", "SP Group · PUB · LTA · SMRT · PSA · Changi Airport Group"],
   ["Telco & large IT", "Singtel · NCS · StarHub · ST Engineering"],
 ];
-function Typed({ text, speed = 22 }) {
-  const [n, setN] = useState(CALM ? text.length : 0);
-  useEffect(() => { if (CALM) return; let i = 0; const t = setInterval(() => { i++; setN(i); if (i >= text.length) clearInterval(t); }, speed); return () => clearInterval(t); }, [text]);
-  return <>{text.slice(0, n)}<span className="caret">▌</span></>;
-}
 function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewTask, newDue, setNewDue, hasArea }) {
   const studyOpen = today >= parseDate(settings.studyStart);
   const target = settings.studyTarget || 240;
@@ -1506,11 +962,6 @@ function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewT
   const who = (ME.en || "wan").toLowerCase().split(" ")[0];
   return (
     <>
-      <WHero cls="h-career" marq="FRONTIER" kicker="Next checkpoint" title={nextP ? nextP.title : "Every checkpoint done"}
-        sub={exam ? `${exam.title.replace(/ passed/i, "")} in ${examDays} days` : `${totalH.toFixed(1)} hours studied in total`}>
-        <Planet3D kind="mars" marks={path.map(m => m.done ? 1 : nextP && nextP.id === m.id ? 2 : 0)} />
-        <div className="lvl-pill caps"><i />{path.filter(m => m.done).length} of {path.length} · {totalH.toFixed(1)} h studied</div>
-      </WHero>
       <main>
         <section className="block wrap" id="study">
           <div className="sechead"><Scramble text="STUDY" /><span className="idx">{streak} week streak<br />target {target / 60} h a week</span></div>
@@ -1577,11 +1028,6 @@ function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmRe
   const sunUp = Math.min(1, calc.streak / 365);
   return (
     <>
-      <WHero cls="h-life" marq="STAY FREE" kicker={`Trading-free since ${dayLabel(since)}`} title={<>Day <span className="num">{calc.streak}</span></>}
-        sub={`${Number(d.state.urges_beaten) || 0} urges beaten · ${ordDays} days to ORD`}>
-        <Planet3D kind="ocean" sun={Math.max(.12, sunUp)} />
-        <div className="lvl-pill caps"><i />{calc.streak} day{calc.streak === 1 ? "" : "s"} trading-free</div>
-      </WHero>
       <main>
         <section className="block wrap" id="streak">
           <div className="sechead"><Scramble text="STAY FREE" /><span className="idx">only you<br />see this</span></div>
@@ -1639,7 +1085,7 @@ function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmRe
 
 /* ================= UNDERGROUND: game-menu shell (v11) ================= */
 /* menu sounds, synthesised (no files). On by default; the mute button remembers your choice. */
-Sound.on = lsGet("ascent-sfx", "on") === "on";
+Sound.on = lsGet("ascent-sfx", "off") === "on";
 Object.assign(Sound, {
   sweep(f1, f2, dur, type = "square", vol = .04, delay = 0) {
     if (!this.on) return;
@@ -1765,15 +1211,11 @@ function Gate() {
         const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
         if (error) throw error;
         setMsg("Check your email for a reset link. Open it on this phone.");
-      } else if (mode === "up") {
-        const { data, error } = await sb.auth.signUp({ email, password: pw, options: { emailRedirectTo: location.origin + location.pathname } });
-        if (error) throw error;
-        if (!data.session) setMsg("Account created. Check your email and tap the confirm link, then sign in here.");
       } else {
         const { error } = await sb.auth.signInWithPassword({ email, password: pw });
         if (error) throw error;
       }
-    } catch (err) { Sound.back(); setMsg(/signups? not allowed|disabled/i.test(err.message || "") ? "New accounts are switched off. Sign in with your existing account." : err.message || "Something went wrong. Check your connection and try again."); }
+    } catch (err) { Sound.back(); setMsg(err.message || "Something went wrong. Check your connection and try again."); }
     setBusy(false);
   };
   const sw = m => { Sound.move(); setMode(m); setMsg(""); };
@@ -1785,11 +1227,11 @@ function Gate() {
         <div className="ug-hud ug-lsub">Underground · <span className="cy">one month at a time</span></div>
         <form className="ug-panel" onSubmit={submit}>
           <label className="ug-fld"><span className="ug-hud">Driver ID · email</span><input className="ug-in" type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
-          {mode !== "forgot" && <label className="ug-fld"><span className="ug-hud">Key · password</span><input className="ug-in" type="password" autoComplete={mode === "up" ? "new-password" : "current-password"} minLength={8} required value={pw} onChange={e => setPw(e.target.value)} /></label>}
+          {mode !== "forgot" && <label className="ug-fld"><span className="ug-hud">Key · password</span><input className="ug-in" type="password" autoComplete="current-password" minLength={8} required value={pw} onChange={e => setPw(e.target.value)} /></label>}
           <div className="ug-err" role="alert">{msg}</div>
-          <button className="ug-btn" disabled={busy}>{busy ? "Loading…" : mode === "up" ? "Create driver" : mode === "forgot" ? "Send reset link" : "Press start"} <span className="key">A</span></button>
+          <button className="ug-btn" disabled={busy}>{busy ? "Loading…" : mode === "forgot" ? "Send reset link" : "Press start"} <span className="key">A</span></button>
           <div className="ug-links">
-            {mode === "in" ? <><button type="button" onClick={() => sw("forgot")}>Forgot password?</button><button type="button" onClick={() => sw("up")}>Create account</button></>
+            {mode === "in" ? <><button type="button" onClick={() => sw("forgot")}>Forgot password?</button><span>Private garage</span></>
               : <button type="button" onClick={() => sw("in")}>Back to sign in</button>}
           </div>
         </form>
@@ -1821,7 +1263,7 @@ function Hub({ d, calc, settings, today, world, onEnter, onSignOut, onUrge }) {
     <div className="ug-screen ug-menu">
       <div className="ug-top">
         <UGLogo small /><div className="ug-sp" />
-        <UGClock />
+        <div className="ug-clockw"><UGClock /></div>
         <button className="ug-pill ug-urge" onClick={onUrge}>Urge?</button>
         <SfxBtn />
         <button className="ug-icon" aria-label="Sign out" onClick={onSignOut}><UGIcon k="out" /></button>
@@ -1859,7 +1301,7 @@ function Hub({ d, calc, settings, today, world, onEnter, onSignOut, onUrge }) {
 }
 
 /* ---------- inside a stage: header + game tabs ---------- */
-function StageBar({ card, tabs, tab, onTab, onBack, onMenu, onSpend }) {
+function StageBar({ card, tabs, tab, onTab, onBack, onMenu, onSpend, onGuide, steps }) {
   const i = tabs.findIndex(t => t[0] === tab);
   const ref = useRef(null);
   useEffect(() => { const el = ref.current && ref.current.querySelector(".on"); el && el.scrollIntoView && el.scrollIntoView({ block: "nearest", inline: "center", behavior: CALM ? "auto" : "smooth" }); }, [tab]);
@@ -1870,14 +1312,86 @@ function StageBar({ card, tabs, tab, onTab, onBack, onMenu, onSpend }) {
         <div className="ug-sp" />
         <div className="ug-pill hide-xs"><span className="ug-hud">{card.jp}</span><span className={card.c}>{card.pill}</span></div>
         <button className="ug-cta" onClick={onSpend}>+ Spend</button>
-        <SfxBtn />
-        <button className="ug-icon" aria-label="Menu" onClick={onMenu}><UGIcon k="menu" /></button>
+        <button className="ug-icon ug-help" aria-label={`Guide: ${steps} next step${steps === 1 ? "" : "s"}`} onClick={onGuide}>?{steps > 0 && <b>{Math.min(9, steps)}</b>}</button>
+        <button className="ug-icon" aria-label="Pause menu" onClick={onMenu}><UGIcon k="menu" /></button>
       </div>
       <div className="ug-tabs">
         <button className="ug-kbd" aria-label="Previous tab" onClick={() => onTab(tabs[Math.max(0, i - 1)][0])}>L1</button>
         <div className="tb" ref={ref} role="tablist">{tabs.map(([id, l]) => <button key={id} role="tab" aria-selected={id === tab} className={"ug-tab" + (id === tab ? " on" : "")} onClick={() => onTab(id)}>{l}</button>)}</div>
         <button className="ug-kbd" aria-label="Next tab" onClick={() => onTab(tabs[Math.min(tabs.length - 1, i + 1)][0])}>R1</button>
       </div>
+    </div>
+  );
+}
+
+/* ---------- app lock: optional 4-digit PIN, stored hashed on this device only ---------- */
+const PIN_KEY = "ascent-pin";
+const pinOn = () => !!lsGet(PIN_KEY, "");
+async function pinHash(pin) {
+  let salt = lsGet("ascent-pin-salt", ""); if (!salt) { salt = uid(); lsSet("ascent-pin-salt", salt); }
+  const s = salt + ":" + pin;
+  try { const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)); return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join(""); }
+  catch (e) { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return "x" + (h >>> 0).toString(16); }
+}
+function PinPad({ mode, onDone, onCancel, onForgot }) {
+  const [pin, setPin] = useState(""); const [first, setFirst] = useState(null);
+  const [msg, setMsg] = useState(""); const [shake, setShake] = useState(0);
+  const [wait, setWait] = useState(0); const fails = useRef(Number(lsGet("ascent-pin-fails", "0")) || 0);
+  useEffect(() => { if (!wait) return; const t = setInterval(() => setWait(w => Math.max(0, w - 1)), 1000); return () => clearInterval(t); }, [!!wait]);
+  const title = mode === "unlock" ? "Locked" : first ? "Confirm PIN" : "New PIN";
+  const sub = mode === "unlock" ? (wait ? `Too many tries. Wait ${wait}s.` : "Enter your 4-digit PIN") : first ? "Type the same 4 digits again" : "Pick 4 digits you'll remember";
+  const bad = t => { Sound.back(); buzz([40, 40, 40]); setShake(s => s + 1); setMsg(t); setPin(""); };
+  const full = async p => {
+    if (mode === "unlock") {
+      if (await pinHash(p) === lsGet(PIN_KEY, "")) { fails.current = 0; lsSet("ascent-pin-fails", "0"); Sound.select(); onDone(); return; }
+      fails.current++; lsSet("ascent-pin-fails", String(fails.current));
+      if (fails.current % 5 === 0) setWait(30);
+      bad("Wrong PIN"); return;
+    }
+    if (!first) { Sound.tick(); setFirst(p); setPin(""); setMsg(""); return; }
+    if (p !== first) { setFirst(null); bad("Didn't match. Start again."); return; }
+    lsSet(PIN_KEY, await pinHash(p)); lsSet("ascent-pin-fails", "0"); Sound.win(); onDone();
+  };
+  const press = k => {
+    if (wait) return;
+    if (k === "del") { setPin(p => p.slice(0, -1)); Sound.tick(); return; }
+    if (pin.length >= 4) return;
+    const p = pin + k; setPin(p); Sound.tick(); buzz(5); setMsg("");
+    if (p.length === 4) setTimeout(() => full(p), 120);
+  };
+  useEffect(() => { const k = e => { if (/^[0-9]$/.test(e.key)) press(e.key); else if (e.key === "Backspace") press("del"); else if (e.key === "Escape" && onCancel) onCancel(); }; addEventListener("keydown", k); return () => removeEventListener("keydown", k); });
+  return (
+    <div className="ug-lock" role="dialog" aria-modal="true" aria-label={title}>
+      <img src="ascent-hero.jpg" alt="" className="ug-lock-bg" />
+      <div className="ug-lock-in">
+        <UGLogo small />
+        <h2 className="ug-t chrome">{title}</h2>
+        <div className="ug-hud">{sub}</div>
+        <div className={"ug-dots4" + (shake ? " shake" : "")} key={shake}>{[0, 1, 2, 3].map(i => <i key={i} className={i < pin.length ? "on" : ""} />)}</div>
+        <div className="ug-lock-msg" role="alert">{msg}</div>
+        <div className="ug-keys">
+          {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map(k => <button key={k} onClick={() => press(k)}>{k}</button>)}
+          <span />
+          <button onClick={() => press("0")}>0</button>
+          <button aria-label="Delete" onClick={() => press("del")}>⌫</button>
+        </div>
+        {mode === "unlock" ? <button className="ug-lock-link" onClick={onForgot}>Forgot PIN? Sign out and sign back in</button>
+          : <button className="ug-lock-link" onClick={onCancel}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
+function LockSettings() {
+  const [on, setOn] = useState(pinOn()); const [setting, setSetting] = useState(false);
+  return (
+    <div className="box">
+      <div className="caps mute">App lock</div>
+      <p className="mute small">{on ? "PIN is on for this device. It's asked when the app opens, and after a minute away." : "Ask for a 4-digit PIN when the app opens on this device, so nobody else can see your money."}</p>
+      <div className="minis">
+        <button className="chip-btn solid2" onClick={() => setSetting(true)}>{on ? "Change PIN" : "Set a PIN"}</button>
+        {on && <button className="chip-btn" onClick={() => { lsSet(PIN_KEY, ""); setOn(false); Sound.back(); }}>Turn lock off</button>}
+      </div>
+      {setting && <PinPad mode="set" onDone={() => { setSetting(false); setOn(true); }} onCancel={() => setSetting(false)} />}
     </div>
   );
 }
@@ -2006,11 +1520,34 @@ function Main({ session, mode, setMode }) {
       else if (e.key === "Escape" && !menu) goHub(); };
     addEventListener("keydown", k); return () => removeEventListener("keydown", k);
   });
+  /* phone back button: close what's open, then go back to the main menu, then (twice) leave */
+  const backRef = useRef(null);
+  backRef.current = () => {
+    if (urge) { setUrge(false); return true; }
+    if (aiOpen) { setAiOpen(false); return true; }
+    if (guide) { setGuide(false); return true; }
+    if (sheet) { setSheet(null); return true; }
+    if (menu) { setMenu(false); return true; }
+    if (view === "world") { goHub(); return true; }
+    return false;
+  };
+  useEffect(() => {
+    const arm = () => { try { if (!history.state || !history.state.ascent) history.pushState({ ascent: 1 }, ""); } catch (e) {} };
+    arm();
+    let exitTry = 0;
+    const pop = () => {
+      if (document.querySelector(".ug-lock")) { arm(); return; }
+      if (backRef.current && backRef.current()) { arm(); return; }
+      if (Date.now() - exitTry > 2500) { exitTry = Date.now(); setToast("Press back again to exit"); setTimeout(() => setToast(t => t === "Press back again to exit" ? "" : t), 2400); arm(); return; }
+      history.back();
+    };
+    addEventListener("popstate", pop); return () => removeEventListener("popstate", pop);
+  }, []);
   const [showDone, setShowDone] = useState(false); const [showLater, setShowLater] = useState(false);
   const [msAsk, setMsAsk] = useState(null);
   const [histN, setHistN] = useState(6);
   const cashRef = useRef(null);
-  useMagnet(); useReveal((d ? "y" : "n") + world);
+  useReveal((d ? "y" : "n") + world);
 
   useEffect(() => {
     let last = scrollY, ticking = false, hideR = false, actR = "";
@@ -2394,6 +1931,7 @@ function Main({ session, mode, setMode }) {
 
       <div className="ug-screen ug-stage">
       <StageBar card={ugCards(d, calc, settings, today).find(c => c.k === world)} tabs={tabs} tab={curTab} onTab={setTab} onBack={goHub}
+        steps={steps.length} onGuide={() => { buzz(10); Sound.tick(); setGuide(true); }}
         onMenu={() => { Sound.tick(); setMenu(true); }} onSpend={() => { buzz(10); Sound.tick(); setSheet({ type: "spend" }); }} />
 
       <div className={"menu ug-menu-ov" + (menu ? " open" : "")} aria-hidden={!menu}>
@@ -2405,6 +1943,7 @@ function Main({ session, mode, setMode }) {
           <button className="chip-btn" onClick={() => { setMenu(false); setSheet({ type: "settings" }); }}>Settings</button>
           <button className="chip-btn" onClick={() => { setMenu(false); doExport("json"); }}>Backup</button>
           <button className="chip-btn" onClick={() => { setMenu(false); setUrge(true); }}>Urge to trade</button>
+          <button className="chip-btn" aria-pressed={sound} onClick={() => { setSfx(!sound); setSound(!sound); }}>Sound: {sound ? "on" : "off"}</button>
           <button className="chip-btn" onClick={signOut}>Sign out</button>
         </div>
       </div>
@@ -2599,7 +2138,6 @@ function Main({ session, mode, setMode }) {
       {party && <Party {...party} onDone={() => setParty(null)} />}
       {toast && !undo && <div className="toast">{toast}</div>}
       {undo && <div className="toast undo" key={undo.id}><span>{undo.msg}</span><button onClick={() => { const f = undo.fn; setUndo(null); f(); flash("Undone"); }}>Undo</button></div>}
-      {!aiOpen && !guide && <button className="ai-fab g-fab" aria-label={`Guide: ${steps.length} next step${steps.length === 1 ? "" : "s"}`} onClick={() => { buzz(10); Sound.tick(); setGuide(true); }}><span className="g-icon sm" aria-hidden="true">?</span><span className="ai-fab-t">Guide</span>{steps.length > 0 && <span className="g-badge">{Math.min(9, steps.length)}</span>}</button>}
       {guide && <Guide steps={steps} aiState={aiState} onClose={() => setGuide(false)} onGo={guideGo} onAskClaude={() => { setGuide(false); openClaude(); }} />}
       <Assistant open={aiOpen} onClose={() => setAiOpen(false)} onChanged={load} seed={aiSeed} />
       {urge && <Urge left={calc.remaining} streak={calc.streak} beaten={Number(d.state.urges_beaten) || 0} onClose={() => setUrge(false)} onBeaten={beatUrge} onTalk={talkUrge} />}
@@ -2613,6 +2151,18 @@ function App() {
   const [mode, setMode] = useState(() => lsGet("ascent-mode", matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   const [session, setSession] = useState(undefined);
   const [recovery, setRecovery] = useState(/type=recovery/.test(location.hash));
+  const [locked, setLocked] = useState(() => pinOn());
+  const prevSession = useRef(undefined);
+  useEffect(() => { // fresh password sign-in unlocks; a restored session keeps the lock
+    if (prevSession.current === null && session) setLocked(false);
+    prevSession.current = session;
+  }, [session]);
+  useEffect(() => {
+    let hid = 0;
+    const v = () => { if (document.hidden) hid = Date.now(); else if (pinOn() && hid && Date.now() - hid > 60000) setLocked(true); };
+    document.addEventListener("visibilitychange", v); return () => document.removeEventListener("visibilitychange", v);
+  }, []);
+  const forgotPin = () => { lsSet(PIN_KEY, ""); lsSet(CKEY, ""); saveQueue([]); setLocked(false); sb.auth.signOut(); };
   useLayoutEffect(() => { document.documentElement.setAttribute("data-mode", mode); lsSet("ascent-mode", mode); }, [mode]);
   useEffect(() => {
     if (!sb) return;
@@ -2624,7 +2174,7 @@ function App() {
   if (!sb) return <div className="gate"><div className="gate-card"><h1>Offline.</h1><p className="mute">Couldn't load the app's connection library. Check your internet and reload once; after that it works offline.</p></div></div>;
   if (session === undefined) return <UGBg />;
   if (recovery && session) return <NewPassword onDone={() => setRecovery(false)} />;
-  return <><UGBg />{session ? <Main session={session} mode={mode} setMode={setMode} /> : <Gate />}</>;
+  return <><UGBg />{session ? <Main session={session} mode={mode} setMode={setMode} /> : <Gate />}{session && locked && <PinPad mode="unlock" onDone={() => setLocked(false)} onForgot={forgotPin} />}</>;
 }
 
 createRoot(document.getElementById("root")).render(<App />);
