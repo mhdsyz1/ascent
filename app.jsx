@@ -24,7 +24,7 @@ const MOBILE = matchMedia("(pointer:coarse)").matches || innerWidth < 700;
 document.documentElement.setAttribute("data-motion", REDUCE ? "off" : MOTION);
 const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-const DEFAULT_SETTINGS = { budget: 200, categories: ["Food", "Transport", "Smokes", "Other"], ord: "2028-09-30", studyStart: "2027-01-01", studyTarget: 240, guiltFree: 20, income: null };
+const DEFAULT_SETTINGS = { investRisk: "Aggressive", budget: 200, categories: ["Food", "Transport", "Smokes", "Other"], ord: "2028-09-30", studyStart: "2027-01-01", studyTarget: 240, guiltFree: 20, income: null };
 const STAGES = [
   { n: "01", t: "Stop the bleeding", w: "Clear all BNPL and credit", g: "$300 buffer, no new credit, loans paid down." },
   { n: "02", t: "Stable", w: "Clear every debt", g: "Network+, first money to your parents, about $4,000 saved." },
@@ -57,6 +57,7 @@ const taskLocked = (t, today) => !!t.due_date && !t.done && taskUnlock(t) > toda
 const rowDate = r => { const [y, m] = r.month_date.split("-").map(Number); const dim = new Date(y, m, 0).getDate(); return new Date(y, m - 1, Math.min(r.due_day || 1, dim)); };
 const groupOf = r => (r.category === "Telco" ? "Phone contracts" : r.entity_name);
 const isOblig = r => r.category !== "Income";
+const isRecurring = r => r.category === "Bill" || r.category === "Parents"; // monthly bills + money to parents: paid out, but not debt
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ Math.random() * 16 >> c / 4).toString(16)));
 const potName = p => p.name.replace(/^Goal: /, "").replace(" (IBKR)", "");
@@ -770,25 +771,212 @@ function BulkDates({ rows, act, onDone }) {
     </div>
   );
 }
-/* every debt's due day on one screen */
+/* every debt + phone line on one screen: set a monthly day, or open one to change single payments — one save */
 function DueDaysSheet({ ents, onClose, act }) {
-  const list = Object.values(ents).map(e => { const up = e.rows.filter(r => !r.is_cleared).sort((a, b) => rowDate(a) - rowDate(b)); return up.length ? { name: e.name, up, day: rowDate(up[0]).getDate(), mixed: new Set(up.map(r => rowDate(r).getDate())).size > 1 } : null; }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  const list = Object.values(ents).map(e => { const up = e.rows.filter(r => !r.is_cleared).sort((a, b) => rowDate(a) - rowDate(b)); return up.length ? { name: e.name, telco: e.cat === "Telco", up, day: rowDate(up[0]).getDate(), mixed: new Set(up.map(r => rowDate(r).getDate())).size > 1 } : null; }).filter(Boolean)
+    .sort((a, b) => (a.telco - b.telco) || a.name.localeCompare(b.name));
   const [v, setV] = useState(() => Object.fromEntries(list.map(e => [e.name, String(e.day)])));
-  const todo = list.flatMap(e => { const dd = Math.round(num(v[e.name])); if (!(dd >= 1 && dd <= 31)) return []; return e.up.map(r => [r, onDay(rowDate(r), dd)]).filter(([r, dt]) => ymd(dt) !== ymd(rowDate(r))); });
+  const [ov, setOv] = useState({}); // single-payment overrides: id -> "YYYY-MM-DD"
+  const [open, setOpen] = useState(null); const [touched, setTouched] = useState({});
+  const target = (e, r) => { if (ov[r.id]) return parseDate(ov[r.id]); const dd = Math.round(num(v[e.name])); return touched[e.name] && dd >= 1 && dd <= 31 ? onDay(rowDate(r), dd) : rowDate(r); };
+  const todo = list.flatMap(e => e.up.map(r => [r, target(e, r)]).filter(([r, dt]) => ymd(dt) !== ymd(rowDate(r))));
   const nDebts = new Set(todo.map(([r]) => r.entity_name)).size;
-  return (
-    <Sheet title="Due dates" hint="Set the day each debt is due every month. Only unpaid payments move." onClose={onClose} wide>
-      <div className="dd-list">
-        {list.map(e => (
-          <div key={e.name} className="dd-row">
-            <span><b>{e.name}</b><small className="mute">{e.up.length} unpaid · next {dayLabel(rowDate(e.up[0]))}{e.mixed ? " · days differ" : ""}</small></span>
-            <input className="field mini" inputMode="numeric" aria-label={`${e.name} due day`} value={v[e.name]} onChange={ev => setV({ ...v, [e.name]: ev.target.value })} />
-          </div>
-        ))}
+  const moved = e => todo.filter(([r]) => r.entity_name === e.name).length;
+  const row = e => (
+    <div key={e.name} className={"dd-item" + (open === e.name ? " open" : "")}>
+      <div className="dd-row">
+        <button className="dd-name" aria-expanded={open === e.name} onClick={() => setOpen(open === e.name ? null : e.name)}>
+          <b>{open === e.name ? "▾" : "▸"} {e.name}</b>
+          <small className="mute">{e.up.length} unpaid · next {dayLabel(rowDate(e.up[0]))}{e.mixed ? " · days differ" : ""}{moved(e) ? <em className="gr"> · {moved(e)} will move</em> : null}</small>
+        </button>
+        <input className="field mini" inputMode="numeric" aria-label={`${e.name} due day every month`} value={v[e.name]} onChange={ev => { const val = ev.target.value; setV({ ...v, [e.name]: val }); setTouched({ ...touched, [e.name]: true }); setOv(o => { const n = { ...o }; e.up.forEach(r => delete n[r.id]); return n; }); }} />
       </div>
-      <button className="solid" style={{ marginTop: 14 }} disabled={!todo.length} onClick={() => { act.bulkDates(todo.map(([r, dt]) => [r, ymd(dt)])); onClose(); }}>{todo.length ? `Move ${todo.length} payment${todo.length > 1 ? "s" : ""} across ${nDebts} debt${nDebts > 1 ? "s" : ""}` : "No changes yet"}</button>
+      {open === e.name && <div className="dd-pays">
+        {e.up.map(r => (
+          <label key={r.id} className={"dd-pay" + (ymd(target(e, r)) !== ymd(rowDate(r)) ? " ch" : "")}>
+            <span className="num">{fmt(r.amount_due, 2)}</span>
+            <input className="field mini" type="date" value={ymd(target(e, r))} onChange={ev => ev.target.value && setOv({ ...ov, [r.id]: ev.target.value })} aria-label={`${e.name} payment of ${fmt(r.amount_due, 2)}`} />
+          </label>
+        ))}
+      </div>}
+    </div>
+  );
+  const debts = list.filter(e => !e.telco), phones = list.filter(e => e.telco);
+  return (
+    <Sheet title="Due dates" hint="Type a day to move all of a debt's unpaid payments, or tap a name to change single payments. Everything saves in one go." onClose={onClose} wide>
+      {debts.length > 0 && <><div className="caps mute dd-h">Debts</div><div className="dd-list">{debts.map(row)}</div></>}
+      {phones.length > 0 && <><div className="caps mute dd-h">Phone lines</div><div className="dd-list">{phones.map(row)}</div></>}
+      <button className="solid" style={{ marginTop: 14 }} disabled={!todo.length} onClick={() => { act.bulkDates(todo.map(([r, dt]) => [r, ymd(dt)])); onClose(); }}>{todo.length ? `Save · move ${todo.length} payment${todo.length > 1 ? "s" : ""} across ${nDebts} ${nDebts > 1 ? "debts & lines" : "debt"}` : "No changes yet"}</button>
     </Sheet>
   );
+}
+
+/* ================= Bills · Parents · Habits (v15) ================= */
+/* Bills and money-to-parents are monthly rows in cashflow_schedule (category "Bill" / "Parents").
+   Templates live in ascent_state.settings; the app keeps 12 months of rows ahead. */
+const PARENTS_NAME = "Mum & Dad";
+const PARENTS_DEFAULT = { on: true, amount: 30, day: 11, start: "2027-09" };
+function recurringRowsNeeded(sched, settings, today) {
+  const rows = [], cur = ym(today), horizon = ym(addMonths(today, 12));
+  const need = (name, cat, amount, day, from) => {
+    const have = new Set(sched.filter(r => r.category === cat && r.entity_name === name && !r.note).map(r => r.month_date.slice(0, 7)));
+    let k = from > cur ? from : cur;
+    for (let i = 0; i < 40 && k <= horizon; i++) {
+      if (!have.has(k)) rows.push({ id: uid(), month_date: k + "-01", entity_name: name, category: cat, amount_due: r2(amount), is_cleared: false, due_day: day });
+      k = ym(addMonths(parseDate(k + "-01"), 1));
+    }
+  };
+  (settings.bills || []).forEach(b => { if (b.name && b.amount > 0) need(b.name, "Bill", b.amount, b.day || 1, b.from || cur); });
+  const p = { ...PARENTS_DEFAULT, ...(settings.parents || {}) };
+  if (p.on && p.amount > 0) need(PARENTS_NAME, "Parents", p.amount, p.day || 11, p.start || PARENTS_DEFAULT.start);
+  return rows;
+}
+const BILL_IDEAS = [["Phone top-up", 15], ["SAFRA", 10], ["Spotify", 11], ["Insurance", 30], ["Gym", 20], ["iCloud", 1.3]];
+
+/* ---------- Money → Bills ---------- */
+function BillsSection({ d, settings, today, act, setSheet }) {
+  const key = ym(today);
+  const bills = settings.bills || [];
+  const rowOf = name => d.sched.find(r => r.category === "Bill" && r.entity_name === name && r.month_date.slice(0, 7) === key);
+  const thisMonth = bills.map(b => rowOf(b.name)).filter(Boolean);
+  const total = thisMonth.reduce((s, r) => s + Number(r.amount_due), 0), paid = thisMonth.filter(r => r.is_cleared).length;
+  return (
+    <section className="block wrap" id="bills">
+      <div className="sechead"><Scramble text="BILLS" /><span className="idx">monthly · not debt<br />{paid}/{thisMonth.length} paid</span></div>
+      <div className="stats reveal"><div><div className="v">{fmt(total)}</div><div className="l">This month</div></div><div><div className="v">{bills.length}</div><div className="l">Bills</div></div><div><div className="v">{fmt(total * 12)}</div><div className="l">A year</div></div></div>
+      <div className="reveal" style={{ marginTop: 10 }}>
+        {bills.length === 0 && <div className="empty">No bills yet. Add your best guess now, fix the amounts after October.</div>}
+        {bills.map(b => { const r = rowOf(b.name); return (
+          <div className="qwrap" key={b.id}>
+            <button className={"quest" + (r && r.is_cleared ? " done" : "")} onClick={e => r && act.toggleRow(r, e)} disabled={!r}>
+              <span className="i">{String(b.day).padStart(2, "0")}</span>
+              <span><div className="t">{b.name}</div><div className="m">Every month on the {ordinal(b.day)}{r && !r.is_cleared && rowDate(r) < today ? " · overdue" : ""}</div></span>
+              <span className="a">{fmt(r ? r.amount_due : b.amount, 2)}</span><span className="ck"><Tick /></span>
+            </button>
+            <button className="qedit" aria-label={"Edit " + b.name} onClick={() => setSheet({ type: "bill", bill: b })}>⋯</button>
+          </div>); })}
+        <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "bill", bill: null })}>+ Add a bill</button></div>
+      </div>
+    </section>
+  );
+}
+const ordinal = n => n + (n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th");
+function BillSheet({ bill, bills, today, onClose, act }) {
+  const [name, setName] = useState(bill ? bill.name : ""); const [amt, setAmt] = useState(bill ? String(bill.amount) : "");
+  const [day, setDay] = useState(String(bill ? bill.day : 1)); const [sure, setSure] = useState(false);
+  const a = num(amt), dd = Math.round(num(day)), nm = name.trim();
+  const dup = bills.some(b => b.name.toLowerCase() === nm.toLowerCase() && (!bill || b.id !== bill.id));
+  const ok = nm && a > 0 && dd >= 1 && dd <= 31 && !dup;
+  return (
+    <Sheet title={bill ? bill.name : "Add a bill"} hint="Repeats every month. Changes apply from this month on; paid months stay as they were." onClose={onClose}>
+      {!bill && <div className="minis">{BILL_IDEAS.filter(([n]) => !bills.some(b => b.name === n)).map(([n, v]) => <button key={n} className="chip-btn" onClick={() => { setName(n); setAmt(String(v)); }}>{n}</button>)}</div>}
+      <Field id="bn" label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="Phone top-up" />
+      <div className="two"><Field id="ba" label="Amount ($, a guess is fine)" inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} placeholder="15" /><Field id="bd2" label="Day of month" inputMode="numeric" value={day} onChange={e => setDay(e.target.value)} /></div>
+      {dup && <p className="note-new">You already have a bill called {nm}.</p>}
+      <button className="solid" disabled={!ok} onClick={() => { act.saveBill({ id: bill ? bill.id : uid(), name: nm, amount: r2(a), day: dd, from: bill ? bill.from : ym(today) }, bill); onClose(); }}>{bill ? "Save changes" : "Add bill"}</button>
+      {bill && (sure ? <div className="confirm" style={{ marginTop: 10 }}><span>Stop this bill? Unpaid months are removed; paid ones stay in history.</span><button className="danger" onClick={() => { act.removeBill(bill); onClose(); }}>Stop bill</button><button className="chip-btn" onClick={() => setSure(false)}>Cancel</button></div>
+        : <div className="minis" style={{ marginTop: 10 }}><button className="chip-btn" onClick={() => setSure(true)}>Stop this bill</button></div>)}
+    </Sheet>
+  );
+}
+
+/* ---------- Money → Parents ---------- */
+function ParentsSection({ d, settings, today, act, setSheet }) {
+  const p = { ...PARENTS_DEFAULT, ...(settings.parents || {}) };
+  const rows = d.sched.filter(r => r.category === "Parents").sort((a, b) => rowDate(a) - rowDate(b));
+  const given = rows.filter(r => r.is_cleared);
+  const total = given.reduce((s, r) => s + Number(r.amount_due), 0);
+  const cur = rows.find(r => r.month_date.slice(0, 7) === ym(today) && !r.note);
+  const started = ym(today) >= p.start;
+  const months = new Set(given.map(r => (r.paid_on || r.month_date).slice(0, 7))).size;
+  return (
+    <section className="block wrap" id="parents">
+      <div className="sechead"><Scramble text="MUM & DAD" /><span className="idx">money you give<br />every month</span></div>
+      <div className="safe reveal">
+        <div className="row"><span className="caps mute">Given so far</span><span className="caps mute">{months} month{months === 1 ? "" : "s"}</span></div>
+        <div className="safe-v">{fmt(total)}</div>
+        <div className="safe-sub">{!p.on ? "Paused." : started ? <>{fmt(p.amount)} on the {ordinal(p.day)} every month.</> : <>🔒 Starts <b>{monthLong(p.start)}</b> · {fmt(p.amount)} a month (Stage 2 of the plan).</>}</div>
+      </div>
+      <div className="reveal" style={{ marginTop: 10 }}>
+        {cur && <div className="qwrap"><button className={"quest" + (cur.is_cleared ? " done" : "")} onClick={e => act.toggleRow(cur, e)}>
+          <span className="i">♥</span><span><div className="t">Give {PARENTS_NAME} · {monthLong(ym(today))}</div><div className="m">Due {dayLabel(rowDate(cur))}</div></span><span className="a">{fmt(cur.amount_due, 2)}</span><span className="ck"><Tick /></span></button><span /></div>}
+        <div className="minis">
+          <button className="chip-btn solid2" onClick={() => setSheet({ type: "parents-extra" })}>+ Give extra</button>
+          <button className="chip-btn" onClick={() => setSheet({ type: "parents-plan" })}>Change plan</button>
+        </div>
+        {given.length > 0 && <div className="recent" style={{ marginTop: 12 }}>
+          {given.slice(-12).reverse().map(r => <div key={r.id}><span>{dayLabel(parseDate(r.paid_on || r.month_date))}{r.note ? " · " + r.note : ""}</span><span className="num">{fmt(r.amount_due, 2)}</span></div>)}
+        </div>}
+      </div>
+    </section>
+  );
+}
+function ParentsPlanSheet({ settings, onClose, act }) {
+  const p = { ...PARENTS_DEFAULT, ...(settings.parents || {}) };
+  const [amt, setAmt] = useState(String(p.amount)); const [day, setDay] = useState(String(p.day)); const [start, setStart] = useState(p.start + "-01"); const [on, setOn] = useState(p.on);
+  const a = num(amt), dd = Math.round(num(day));
+  return (
+    <Sheet title="Money for Mum & Dad" hint="The plan: $30–50 a month from Sep 2027, once your loans are cleared. It's counted in safe-to-spend like a bill." onClose={onClose}>
+      <div className="cats" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 10 }}><button className={"cat" + (on ? " on" : "")} onClick={() => setOn(true)}>On</button><button className={"cat" + (!on ? " on" : "")} onClick={() => setOn(false)}>Paused</button></div>
+      <div className="two"><Field id="pa" label="Amount each month ($)" inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} /><Field id="pd" label="Day of month" inputMode="numeric" value={day} onChange={e => setDay(e.target.value)} /></div>
+      <Field id="ps" label="Start month" type="date" value={start} onChange={e => setStart(e.target.value)} />
+      <button className="solid" style={{ marginTop: 10 }} disabled={!(a > 0 && dd >= 1 && dd <= 31 && start)} onClick={() => { act.saveParents({ on, amount: r2(a), day: dd, start: start.slice(0, 7) }); onClose(); }}>Save plan</button>
+    </Sheet>
+  );
+}
+
+/* ---------- Life → Habits ---------- */
+const HABIT_IDEAS = ["Solat 5 times", "Exercise 20 min", "No trading apps", "Read Quran", "Study 30 min", "Sleep before 12"];
+const habitStreak = (h, log, today) => {
+  let n = 0, dt = new Date(today);
+  if (!(log[ymd(dt)] || []).includes(h.id)) dt = addDays(dt, -1); // today not ticked yet doesn't break it
+  while ((log[ymd(dt)] || []).includes(h.id)) { n++; dt = addDays(dt, -1); }
+  return n;
+};
+function HabitsSection({ settings, today, act }) {
+  const habits = settings.habits || [], log = settings.habitLog || {};
+  const t = ymd(today), doneToday = log[t] || [];
+  const [adding, setAdding] = useState(false); const [nm, setNm] = useState(""); const [edit, setEdit] = useState(false);
+  const week = Array.from({ length: 7 }, (_, i) => addDays(today, i - 6));
+  const all = habits.length && habits.every(h => doneToday.includes(h.id));
+  return (
+    <section className="block wrap" id="habits">
+      <div className="sechead"><Scramble text="HABITS" /><span className="idx">today<br />{doneToday.filter(id => habits.some(h => h.id === id)).length}/{habits.length} done</span></div>
+      <div className="reveal">
+        {habits.length === 0 && <div className="empty">Pick 2–4 small things you'll do every day. They count in your monthly report card.</div>}
+        {habits.map(h => { const on = doneToday.includes(h.id), st = habitStreak(h, log, today); return (
+          <div className="qwrap" key={h.id}>
+            <button className={"quest" + (on ? " done" : "")} aria-pressed={on} onClick={() => act.toggleHabit(h.id)}>
+              <span className="i">{st > 0 ? "🔥" : "·"}</span>
+              <span><div className="t">{h.name}</div><div className="m hb-week">{week.map(dt => <i key={ymd(dt)} className={(log[ymd(dt)] || []).includes(h.id) ? "on" : ""} title={dayLabel(dt)} />)}<em>{st} day{st === 1 ? "" : "s"}</em></div></span>
+              <span className="a" /><span className="ck"><Tick /></span>
+            </button>
+            {edit ? <button className="qedit" aria-label={"Remove " + h.name} onClick={() => act.removeHabit(h.id)}>✕</button> : <span />}
+          </div>); })}
+        {all ? <div className="ug-hud" style={{ color: "var(--gr)", margin: "8px 0" }}>All done today. Clean lap. ✓</div> : null}
+        {adding ? <div className="box" style={{ marginTop: 10 }}>
+          <div className="minis">{HABIT_IDEAS.filter(x => !habits.some(h => h.name === x)).map(x => <button key={x} className="chip-btn" onClick={() => setNm(x)}>{x}</button>)}</div>
+          <div className="addrow"><input className="field" placeholder="New habit…" value={nm} onChange={e => setNm(e.target.value)} aria-label="New habit" />
+            <button className="cta" disabled={!nm.trim()} onClick={() => { act.addHabit(nm.trim()); setNm(""); setAdding(false); }}>Add</button></div>
+        </div> : <div className="minis">
+          {habits.length < 6 && <button className="chip-btn solid2" onClick={() => setAdding(true)}>+ Add a habit</button>}
+          {habits.length > 0 && <button className="chip-btn" onClick={() => setEdit(!edit)}>{edit ? "Done" : "Remove habits"}</button>}
+        </div>}
+      </div>
+    </section>
+  );
+}
+/* habits share of the report card: ticks / possible ticks in that month */
+function habitScore(settings, key, today) {
+  const habits = settings.habits || [], log = settings.habitLog || {};
+  if (!habits.length) return null;
+  const [y, m] = key.split("-").map(Number), end = key === ym(today) ? today : new Date(y, m, 0);
+  let can = 0, did = 0;
+  for (let dt = new Date(y, m - 1, 1); dt <= end; dt = addDays(dt, 1)) {
+    const k = ymd(dt), on = log[k] || [];
+    habits.forEach(h => { if (!h.since || h.since <= k) { can++; if (on.includes(h.id)) did++; } });
+  }
+  return can ? { did, can } : null;
 }
 
 /* ---------------- Guide: next steps + how-to (works without AI) ---------------- */
@@ -906,6 +1094,22 @@ const areaOf = x => x.area || (/invest|stashaway|ibkr|syfe/i.test(x.title) ? "in
 const prevKey = k => { const [y, m] = k.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
 
 /* ================= INVEST: The Grove ================= */
+const OWN = [
+  { k: "Shares", t: "Growth", p: "Part-owner of hundreds of Shariah-screened companies in the US, other rich countries and emerging markets. Grows the most, drops the most." },
+  { k: "Sukuk", t: "Steady income", p: "Co-ownership of real assets (roads, buildings, power) paying a share of the rent, about 4–5% a year lately. Calmer than shares." },
+  { k: "Gold", t: "Shock absorber", p: "Often holds up when shares fall. Doesn't pay income; it's there to cushion." },
+];
+const OWN_NAMES = ["Nvidia", "Apple", "Microsoft", "Alphabet", "Broadcom", "Tesla", "AMD", "Eli Lilly"];
+const LEARN = [
+  { t: "What DCA really does", p: "Same amount, same day, every month. When prices are low your $50 automatically buys more units; when high, fewer. You never have to decide anything, which is the point." },
+  { t: "Three jobs: shares, sukuk, gold", p: "Shares grow, sukuk pay steady income, gold cushions crashes. Your risk level only changes how much of each. Aggressive = mostly shares." },
+  { t: "What makes it Shariah", p: "Screens remove interest-based finance, alcohol, pork, gambling and companies with too much debt (roughly over 30% of their value). Sukuk replace interest with a share of real rent or profit." },
+  { t: "Fees are a silent tax", p: "About 1% a year sounds small. On $10,000 that's $100 every year, compounding for decades. Low, automatic, boring beats clever." },
+  { t: "Bad years are normal", p: "Drops of 20–35% have come every few years in history, and markets have always recovered given time, though nothing is guaranteed. In a crash your job is to do nothing. The same $50 goes in." },
+  { t: "Where a fund lives matters", p: "US-listed funds (like SPUS) lose 30% of dividends to US tax for Singaporeans, and US holdings above US$60,000 can face US estate tax. Irish-domiciled funds cut the dividend tax to about 15% and avoid that estate risk." },
+  { t: "Let rebalancing happen", p: "When shares race ahead, StashAway trims them back to your mix and tops up sukuk and gold. You never need to time it yourself." },
+  { t: "Scale with salary, not with hype", p: "After ORD, raise the percentage (8%, then 20%) when your pay rises. Never raise it because markets are hot or 'cheap'." },
+];
 const INVEST_RX = /stashaway|invest|ibkr|interactive brokers/i;
 const LEVELS = [
   { at: 0, name: "Stardust" }, { at: 1, name: "Comet" }, { at: 3, name: "Moon" }, { at: 6, name: "Planet" },
@@ -939,7 +1143,7 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
     { t: "All BNPL and credit cleared", ok: calc.creditLeft < .005 && calc.debts.length > 0 },
     { t: "$300 buffer in the bank", ok: !!buffer && Number(buffer.balance) >= Number(buffer.goal || 300) },
     { t: "Investing pot set up", ok: !!inv.pot },
-    { t: `Opening day: ${dayLabel(start)}`, ok: open },
+    { t: `Opening day: ${dayYr(start)}`, ok: open },
   ];
   const todos = d.tasks.filter(t => !t.done && areaOf(t) === "invest");
   const reviewMonth = [2, 8].includes(today.getMonth()); // March and September
@@ -949,23 +1153,58 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
       <main>
         <section className="block wrap" id="grove">
           <div className="sechead"><Scramble text="THIS MONTH" /><span className="idx">you level up by<br />showing up, not by prices</span></div>
-          <div className="duo">
             <div className="budget reveal">
+              <div className="row"><span className="caps mute">Level {inv.li + 1} · {inv.level.name}</span><span className="caps mute">{settings.investRisk || "Aggressive"}</span></div>
+              <div className="safe-v">{inv.n} <small className="mute" style={{ fontSize: 14 }}>month{inv.n === 1 ? "" : "s"} invested</small></div>
               <div className="row"><span className="caps mute">{inv.next ? `Next: ${inv.next.name}` : "Max level"}</span><span className="caps mute">{inv.next ? `${inv.toNext} month${inv.toNext === 1 ? "" : "s"} to go` : "legend"}</span></div>
               <div className="meter"><i style={{ width: Math.min(100, inv.pct) + "%" }} /></div>
-              {!open ? <p className="mute small">Investing opens {dayLabel(start)}. Until then, clear the launch checklist.</p>
+              {!open ? <p className="mute small">Investing opens {dayYr(start)}. Until then, clear the launch checklist.</p>
                 : inv.thisMonth ? <p className="w-ok">Invested this month. Nothing else to do: don't check, don't top up.</p>
                   : <p className="mute small">This month's investment isn't in yet. Put in the fixed amount, the same as every month.</p>}
               <div className="minis">
                 {open && inv.pot && !inv.thisMonth && <button className="chip-btn solid2" onClick={() => setSheet({ type: "plant" })}>Invest {fmt(monthly)} this month</button>}
                 {!inv.pot && <button className="chip-btn solid2" onClick={() => act.addPot({ name: "StashAway Shariah", goal: 650, note: "$50/month from Sep 2027 · automatic" })}>Create the investing pot</button>}
               </div>
+              <p className="mute small" style={{ marginTop: 10 }}>StashAway Shariah Global · {settings.investRisk || "Aggressive"} · shares + sukuk + gold · {fmt(monthly)} a month</p>
             </div>
+            <div className="budget reveal" style={{ marginTop: 12 }}>
+              {(() => { const ord = parseDate(settings.ord || "2028-09-30"); const mdiff = (x, y) => (y.getFullYear() - x.getFullYear()) * 12 + y.getMonth() - x.getMonth();
+                let left = Math.max(0, mdiff(today < start ? start : today, ord) + 1); if (today >= start && inv.thisMonth) left = Math.max(0, left - 1);
+                const due = today < start ? 0 : mdiff(start, today) + 1; const pace = inv.planted + monthly * left;
+                return <>
+                  <div className="row"><span className="caps mute">On track</span><span className="caps mute">contributions only</span></div>
+                  <div className="row"><span className="v">{fmt(inv.planted)}</span><span className="num">{today < start ? "starts " + monthLabel(ym(start)) : `${inv.n} of ${due} month${due === 1 ? "" : "s"} in`}</span></div>
+                  <div className="meter"><i style={{ width: Math.min(100, pace ? inv.planted / pace * 100 : 0) + "%" }} /></div>
+                  <p className="mute small">On pace for about <b>{fmt(pace)}</b> put in by ORD ({monthLabel(ym(ord))}). Market ups and downs aren't counted, on purpose.</p>
+                </>; })()}
+            </div>
+        </section>
+        <section className="block wrap" id="checklist">
+          <div className="sechead"><Scramble text="CHECKLIST" /><span className="idx">before<br />opening day</span></div>
             <div className="budget reveal">
-              <div className="caps mute">Launch checklist</div>
               {quests.map(q => <div key={q.t} className={"quest-line" + (q.ok ? " ok" : "")}><span className="qk">{q.ok ? "✓" : "·"}</span>{q.t}</div>)}
               {todos.map(t => { const lk = taskLocked(t, today); return <button key={t.id} className={"quest-line todo-line" + (lk ? " locked" : "")} onClick={() => act.toggleTask(t)}><span className="qk">{lk ? "🔒" : "○"}</span>{t.title}{t.due_date ? " · " + dayLabel(parseDate(t.due_date)) : ""}{lk ? ` · unlocks ${dayYr(taskUnlock(t))}` : ""}</button>; })}
             </div>
+        </section>
+        <section className="block wrap" id="own">
+          <div className="sechead"><Scramble text="WHAT YOU OWN" /><span className="idx">three parts<br />one portfolio</span></div>
+          <div className="own-grid reveal">
+            {OWN.map(o => <div key={o.t} className="budget own"><div className="caps mute">{o.k}</div><h4>{o.t}</h4><p className="mute small">{o.p}</p></div>)}
+          </div>
+          <div className="budget reveal" style={{ marginTop: 12 }}>
+            <div className="caps mute">Biggest names in US Shariah funds</div>
+            <div className="own-names">{OWN_NAMES.map(n => <span key={n}>{n}</span>)}</div>
+            <p className="mute small">Shariah screens remove banks and other interest-based finance, alcohol, pork, gambling and heavily indebted companies. Exact funds: StashAway app → your portfolio → breakdown. Look at review time only.</p>
+          </div>
+        </section>
+        <section className="block wrap" id="learn">
+          <div className="sechead"><Scramble text="LEARN" /><span className="idx">{LEARN.filter((_, i) => i <= inv.li).length} of {LEARN.length}<br />unlock by levelling up</span></div>
+          <div className="reveal">
+            {LEARN.map((c, i) => { const on = i <= inv.li; return (
+              <details key={c.t} className={"hist learn" + (on ? "" : " locked")} open={on && i === inv.li}>
+                <summary><span className="hm">{on ? String(i + 1).padStart(2, "0") : "🔒"} · {c.t}</span><span className="num">{on ? "" : "Level " + (i + 1) + " · " + LEVELS[i].name}</span></summary>
+                {on && <p className="small" style={{ margin: "4px 0 10px", lineHeight: 1.55 }}>{c.p}</p>}
+              </details>); })}
           </div>
         </section>
         <section className="block wrap" id="badges">
@@ -982,11 +1221,24 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
             <li>Extra money only at the review in March and September, and only from money with no other job.</li>
             <li>Never from the buffer, the Degree pot or Mum &amp; Dad's money.</li>
             <li>No single stocks, no price alerts, no checking in between.</li>
-            <li>A drop is not a signal. The monthly amount goes in anyway.</li>
+            <li>A drop is not a signal. The same amount goes in; it simply buys more units.</li>
           </ol>
+        </section>
+        <section className="block wrap" id="review">
+          <div className="sechead"><Scramble text="REVIEW" /><span className="idx">March &amp;<br />September only</span></div>
           <div className="budget reveal">
             <div className="row"><span className="caps mute">Value check</span><span className="caps mute">March &amp; September only</span></div>
             <div className="row"><span className="v">{val ? fmt(val.amount) : "—"}</span><span className="num">{val ? "checked " + dayLabel(parseDate(val.at)) : "no review yet"}</span></div>
+            {(() => { const gain = val ? val.amount - inv.planted : null; const extras = inv.moves.filter(mv => { const mo = new Date(mv.created_at).getMonth(); return ![2, 8].includes(mo) && !/monthly/i.test(mv.reason || ""); }).length;
+              const due = today < start ? 0 : (today.getFullYear() - start.getFullYear()) * 12 + today.getMonth() - start.getMonth() + (inv.thisMonth ? 1 : 0);
+              return <div className="rev-grid">
+                <div><span className="caps mute">Put in</span><b>{fmt(inv.planted)}</b></div>
+                <div><span className="caps mute">Months</span><b>{inv.n}</b></div>
+                <div><span className="caps mute">Average</span><b>{inv.n ? fmt(inv.planted / inv.n) : "—"}</b></div>
+                <div><span className="caps mute">Up / down</span><b className={gain == null ? "" : gain >= 0 ? "gr" : "pk"}>{gain == null ? "—" : (gain >= 0 ? "+" : "−") + fmt(Math.abs(gain))}</b></div>
+                <div><span className="caps mute">Fees, max/yr</span><b>{val ? "≈" + fmt(val.amount * .012) : "—"}</b></div>
+                <div><span className="caps mute">Rules</span><b className={extras || due - inv.n > 0 ? "pk" : "gr"}>{extras ? `${extras} extra top-up${extras > 1 ? "s" : ""}` : due - inv.n > 0 ? `${due - inv.n} missed` : "Kept ✓"}</b></div>
+              </div>; })()}
             <p className="mute small">{reviewMonth ? "It's review month. Look once, write the number here, close the app." : "Not a review month. The number can wait."}</p>
             {reviewMonth && <div className="minis"><button className="chip-btn" onClick={() => setSheet({ type: "invest-value" })}>Log this review's value</button></div>}
           </div>
@@ -1088,9 +1340,10 @@ function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmRe
     <>
       <main>
         <section className="block wrap" id="streak">
-          <div className="sechead"><Scramble text="STAY FREE" /><span className="idx">only you<br />see this</span></div>
-          <div className="duo">
+          <div className="sechead"><Scramble text="STREAK" /><span className="idx">trading-free<br />only you see this</span></div>
             <div className="streak reveal">
+              <div className="safe-v">Day {calc.streak}</div>
+              <div className="mute small" style={{ marginBottom: 10 }}>Since {dayLabel(since)} {since.getFullYear()}</div>
               <div className="week">{Array.from({ length: 7 }, (_, i) => { const dt = addDays(today, i - 6); return <span key={i} className={diffDays(dt, since) >= 0 ? "on" : ""}>{DAYS[dt.getDay()].charAt(0)}</span>; })}</div>
               <div className="minis">
                 <button className="chip-btn solid2" onClick={() => setUrge(true)}>I feel like trading</button>
@@ -1100,13 +1353,16 @@ function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmRe
                 ? <div><button className="signout" onClick={() => setConfirmReset(true)}>I slipped. Reset my streak.</button></div>
                 : <div className="confirm"><span>A slip isn't the end. Reset, then tell your friend.</span><button className="danger" onClick={resetStreak}>Reset to day 1</button><button className="chip-btn" onClick={() => setConfirmReset(false)}>Cancel</button></div>}
             </div>
+        </section>
+        <section className="block wrap" id="why">
+          <div className="sechead"><Scramble text="WHY" /><span className="idx">your reasons<br />read them often</span></div>
             <div className="budget reveal why">
               <div className="caps mute">Why you're doing this</div>
               {ME.why.length ? <ul>{ME.why.map((w, i) => <li key={i}>{w}</li>)}</ul> : <p className="mute small">Add your reasons in Settings → About you. They show here and when an urge hits.</p>}
               <div className="minis"><button className="chip-btn" onClick={() => setSheet({ type: "settings" })}>Edit reasons</button></div>
             </div>
-          </div>
         </section>
+        <HabitsSection settings={settings} today={today} act={act} />
         <section className="block wrap" id="family">
           <div className="sechead"><Scramble text="FAMILY & DREAMS" /><span className="idx">Mum &amp; Dad first</span></div>
           <div className="pots reveal">
@@ -1168,10 +1424,10 @@ const setSfx = on => { Sound.on = on; lsSet("ascent-sfx", on ? "on" : "off"); if
 
 /* the four stages: what each carousel card and stage bar shows */
 const UG_TABS = {
-  money: [["week", "This week"], ["climb", "Climb"], ["debts", "Money"], ["history", "History"]],
-  invest: [["grove", "This month"], ["badges", "Badges"], ["rules", "Rules"]],
+  money: [["week", "Week"], ["climb", "Climb"], ["debts", "Debts"], ["bills", "Bills"], ["spend", "Spend"], ["pots", "Pots"], ["parents", "Parents"], ["history", "History"]],
+  invest: [["grove", "This month"], ["checklist", "Checklist"], ["own", "Own"], ["learn", "Learn"], ["badges", "Badges"], ["rules", "Rules"], ["review", "Review"]],
   career: [["study", "Study"], ["path", "Path"], ["todo", "To-dos"], ["employers", "Jobs"]],
-  life: [["streak", "Stay free"], ["family", "Family"], ["milestones", "Journey"]],
+  life: [["streak", "Streak"], ["why", "Why"], ["habits", "Habits"], ["family", "Family"], ["milestones", "Journey"]],
 };
 const ugTabOf = id => (id === "ascent" || id === "top" ? "climb" : id === "streaks" ? "streak" : id);
 const UG_IMG = id => `https://images.unsplash.com/photo-${id}?w=${innerWidth > 900 ? 900 : 640}&q=62&auto=format&fit=crop`;
@@ -1490,6 +1746,8 @@ function monthReport(d, settings, key, today) {
     { k: "budget", l: "Spent vs budget", v: `${fmt(spend)} / ${fmt(budget)}`, p: budget ? (spend <= budget ? 1 : Math.max(0, 1 - (spend - budget) / budget)) : null, w: 25 },
     { k: "study", l: "Study hours", v: `${hrs(studyMin)} / ${hrs(target)} h`, p: studyDays ? Math.min(1, studyMin / Math.max(1, target)) : null, w: 15 },
   ];
+  const hb = habitScore(settings, key, today);
+  rows.push({ k: "habits", l: "Daily habits kept", v: hb ? `${hb.did} / ${hb.can}` : "", p: hb ? hb.did / hb.can : null, w: 15 });
   const scored = rows.filter(r => r.p != null), tw = scored.reduce((a, r) => a + r.w, 0);
   const score = tw ? scored.reduce((a, r) => a + r.p * r.w, 0) / tw : 1;
   const rank = score >= .95 ? "S" : score >= .8 ? "A" : score >= .6 ? "B" : "C";
@@ -1743,7 +2001,8 @@ function Main({ session, mode, setMode }) {
     if (!d) return null;
     const monthKey = ym(today);
     const sched = d.sched.map(r => ({ ...r, _dt: rowDate(r) }));
-    const obl = sched.filter(isOblig), inc = sched.filter(r => !isOblig(r));
+    const out = sched.filter(isOblig), inc = sched.filter(r => !isOblig(r)); // everything you pay
+    const obl = out.filter(r => !isRecurring(r));                                  // debts only (bills + parents aren't debt)
     const A = r => Number(r.amount_due);
     const totalAll = obl.reduce((s, r) => s + A(r), 0) || 1;
     const remaining = obl.filter(r => !r.is_cleared).reduce((s, r) => s + A(r), 0);
@@ -1766,7 +2025,7 @@ function Main({ session, mode, setMode }) {
     const upcomingPay = inc.filter(r => !r.is_cleared && r._dt >= addDays(today, -5)).sort((a, b) => a._dt - b._dt);
     const nextPay = upcomingPay[0];
     const payDate = nextPay ? (nextPay._dt < today ? today : nextPay._dt) : addDays(today, 30);
-    const dueBefore = obl.filter(r => !r.is_cleared && r._dt < payDate).reduce((s, r) => s + A(r), 0);
+    const dueBefore = out.filter(r => !r.is_cleared && r._dt < payDate).reduce((s, r) => s + A(r), 0);
     const cash = d.state.cash_balance == null ? null : Number(d.state.cash_balance);
     const safe = cash == null ? null : cash - dueBefore;
     const daysToPay = Math.max(1, diffDays(payDate, today));
@@ -1774,7 +2033,7 @@ function Main({ session, mode, setMode }) {
     const week = [];
     sched.forEach(r => {
       const late = !r.is_cleared && r._dt < today, inWin = r._dt >= today && r._dt <= end, recentDone = r.is_cleared && r._dt >= addDays(today, -3) && r._dt <= end;
-      if (late || inWin || recentDone) week.push({ kind: isOblig(r) ? "bill" : "income", id: r.id, row: r, date: r._dt, late, done: r.is_cleared, title: isOblig(r) ? "Pay " + r.entity_name : (r.entity_name === "Inflow" ? "Allowance arrives" : r.entity_name), amt: A(r) });
+      if (late || inWin || recentDone) week.push({ kind: isOblig(r) ? "bill" : "income", id: r.id, row: r, date: r._dt, late, done: r.is_cleared, title: r.category === "Parents" ? "Give " + r.entity_name : isOblig(r) ? "Pay " + r.entity_name : (r.entity_name === "Inflow" ? "Allowance arrives" : r.entity_name), amt: A(r) });
     });
     const tasksOpen = d.tasks.filter(t => !t.done), tasksDone = d.tasks.filter(t => t.done).sort((a, b) => new Date(b.done_at || 0) - new Date(a.done_at || 0));
     tasksOpen.forEach(t => { const dt = t.due_date ? parseDate(t.due_date) : null; if (!dt || dt <= end) week.push({ kind: "task", id: t.id, row: t, date: dt, late: dt && dt < today, done: false, title: t.title }); });
@@ -1799,7 +2058,7 @@ function Main({ session, mode, setMode }) {
     months.forEach(k => {
       const cur = k === monthKey;
       const iM = inc.filter(r => r.month_date.slice(0, 7) === k && (!cur || !r.is_cleared)).reduce((s, r) => s + A(r), 0) || (k > lastIncKey ? incAmt : 0);
-      const oM = obl.filter(r => r.month_date.slice(0, 7) === k && !r.is_cleared).reduce((s, r) => s + A(r), 0);
+      const oM = out.filter(r => r.month_date.slice(0, 7) === k && !r.is_cleared).reduce((s, r) => s + A(r), 0);
       const live = cur ? Math.max(0, settings.budget - spentTotal) : settings.budget + settings.guiltFree;
       run += iM - oM - live; proj[k] = run;
     });
@@ -1815,7 +2074,7 @@ function Main({ session, mode, setMode }) {
     d.study.forEach(s => { h(s.studied_on.slice(0, 7)).study += s.minutes; });
     d.moves.forEach(m => { const x = h(ymd(new Date(m.created_at)).slice(0, 7)); if (Number(m.amount) > 0) x.saved += Number(m.amount); else x.out -= Number(m.amount); });
     const history = Object.values(H).filter(x => x.key <= monthKey).sort((a, b) => b.key.localeCompare(a.key));
-    return { monthKey, obl, inc, ents, debts, phones, phoneLeft, phoneTotal, phoneLast, totalAll, remaining, creditLeft, potsSum, stageIdx, nextPay, payDate, dueBefore, cash, safe, daysToPay, week, later, tasksDone, soon, spentTotal, byCat, studyWeek, streak, months, leftAfter, proj, events, history, netWorth: potsSum + (cash || 0) - remaining };
+    return { monthKey, out, obl, inc, ents, debts, phones, phoneLeft, phoneTotal, phoneLast, totalAll, remaining, creditLeft, potsSum, stageIdx, nextPay, payDate, dueBefore, cash, safe, daysToPay, week, later, tasksDone, soon, spentTotal, byCat, studyWeek, streak, months, leftAfter, proj, events, history, netWorth: potsSum + (cash || 0) - remaining };
   }, [d]);
 
   /* ----- keep the allowance going forward, month after month ----- */
@@ -1860,6 +2119,19 @@ function Main({ session, mode, setMode }) {
     setD(x => ({ ...x, ms: x.ms.map(y => y.id === hit.id ? { ...y, ...patch } : y) }));
     write([{ t: "update", table: "ascent_milestones", patch, f: [["eq", "id", hit.id]] }]).catch(() => {}).finally(() => { autoBusy.current = false; });
     setTimeout(() => setParty(p => p || msParty(hit, innerWidth / 2, innerHeight / 2)), 1200);
+  }, [d, calc]);
+
+  /* keep 12 months of bill + parents rows ahead */
+  const recurSig = useRef("");
+  useEffect(() => {
+    if (!d || !calc || status === "offline" || !navigator.onLine) return;
+    const st = { ...DEFAULT_SETTINGS, ...((d.state && d.state.settings) || {}) };
+    const sig = JSON.stringify([st.bills || [], st.parents || null, ym(today), d.sched.length]);
+    if (recurSig.current === sig) return; recurSig.current = sig;
+    const rows = recurringRowsNeeded(d.sched, st, today);
+    if (!rows.length) return;
+    setD(x => ({ ...x, sched: [...x.sched, ...rows] }));
+    write([{ t: "insert", table: "cashflow_schedule", row: rows }]).catch(() => {});
   }, [d, calc]);
 
   /* new month: show last month's report card once */
@@ -2003,6 +2275,50 @@ function Main({ session, mode, setMode }) {
       if (await commit([{ t: "update", table: "ascent_milestones", patch, f: [["eq", "id", m.id]] }]) && next) setParty(msParty(m, ev ? ev.clientX : innerWidth / 2, ev ? ev.clientY : innerHeight / 2));
     },
     addMs: async p => { setSheet(null); const row = { id: uid(), sort: (d.ms.reduce((mx, m) => Math.max(mx, m.sort || 0), 0) + 10), done: false, ...p }; setD(s => ({ ...s, ms: [...s.ms, row] })); if (await commit([{ t: "insert", table: "ascent_milestones", row }])) flash("Milestone added"); },
+    patchSettings: (patch, msg) => { // quiet settings save (habits, bills, parents)
+      const merged = { ...settings, ...patch };
+      setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
+      commit([{ t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] }]).then(ok => { if (ok && msg) flash(msg); });
+    },
+    dropFuture: (cat, name) => { // remove unpaid regular rows from this month on (they get rebuilt from the plan)
+      const from = calc.monthKey + "-01";
+      setD(x => ({ ...x, sched: x.sched.filter(r => !(r.category === cat && r.entity_name === name && !r.is_cleared && !r.note && r.month_date >= from)) }));
+      return { t: "delete", table: "cashflow_schedule", f: [["eq", "category", cat], ["eq", "entity_name", name], ["eq", "is_cleared", false], ["gte", "month_date", from]] };
+    },
+    saveBill: async (bill, prev) => {
+      const ops = prev ? [act.dropFuture("Bill", prev.name)] : [];
+      const bills = [...(settings.bills || []).filter(b => b.id !== bill.id), bill].sort((a, b) => a.day - b.day);
+      const merged = { ...settings, bills };
+      setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
+      if (await commit([...ops, { t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] }])) { Sound.check(); flash(prev ? "Bill updated" : `${bill.name} added`); }
+    },
+    removeBill: async bill => {
+      const op = act.dropFuture("Bill", bill.name);
+      setD(x => ({ ...x, sched: x.sched.filter(r => !(r.category === "Bill" && r.entity_name === bill.name && !r.is_cleared)) }));
+      const merged = { ...settings, bills: (settings.bills || []).filter(b => b.id !== bill.id) };
+      setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
+      if (await commit([{ ...op, f: [["eq", "category", "Bill"], ["eq", "entity_name", bill.name], ["eq", "is_cleared", false]] }, { t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] }])) flash(`${bill.name} stopped`);
+    },
+    saveParents: async p => {
+      const op = act.dropFuture("Parents", PARENTS_NAME);
+      const merged = { ...settings, parents: p };
+      setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
+      if (await commit([op, { t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] }])) { Sound.check(); flash("Plan saved"); }
+    },
+    giveParents: async amt => {
+      const row = { id: uid(), month_date: calc.monthKey + "-01", entity_name: PARENTS_NAME, category: "Parents", amount_due: r2(amt), is_cleared: true, due_day: today.getDate(), paid_on: ymd(today), note: "Extra" };
+      setD(x => ({ ...x, sched: [...x.sched, row] }));
+      if (await commit([{ t: "insert", table: "cashflow_schedule", row }, ...cashOps(-r2(amt))])) { Sound.win(); flash(`${fmt(amt, 2)} to Mum & Dad. Alhamdulillah.`); }
+    },
+    toggleHabit: id => {
+      const t = ymd(today), log = { ...(settings.habitLog || {}) }, on = log[t] || [];
+      const was = on.includes(id); log[t] = was ? on.filter(x => x !== id) : [...on, id];
+      const cut = ymd(addDays(today, -400)); Object.keys(log).forEach(k => { if (k < cut) delete log[k]; });
+      if (!was) { Sound.check(); buzz(10); } else Sound.tick();
+      act.patchSettings({ habitLog: log });
+    },
+    addHabit: name => { act.patchSettings({ habits: [...(settings.habits || []), { id: uid(), name, since: ymd(today) }] }, `${name} added`); },
+    removeHabit: id => { act.patchSettings({ habits: (settings.habits || []).filter(h => h.id !== id) }); },
     saveReport: (key, snap) => { // freeze a finished month's result (quietly)
       const merged = { ...settings, reports: { ...(settings.reports || {}), [key]: snap } };
       setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
@@ -2040,7 +2356,7 @@ function Main({ session, mode, setMode }) {
     const [k, v] = go.split(/:(.+)/);
     if (k === "scroll") {
       const id = v === "streaks" ? "streak" : v;
-      const home = { week: "money", ascent: "money", top: "money", debts: "money", history: "money", streak: "life", family: "life", milestones: "life", study: "career", path: "career", todo: "career", grove: "invest", badges: "invest", rules: "invest" }[id] || "money";
+      const home = { week: "money", ascent: "money", top: "money", debts: "money", history: "money", bills: "money", spend: "money", pots: "money", parents: "money", habits: "life", why: "life", checklist: "invest", review: "invest", own: "invest", learn: "invest", streak: "life", family: "life", milestones: "life", study: "career", path: "career", todo: "career", grove: "invest", badges: "invest", rules: "invest" }[id] || "money";
       const jump = () => { setTabRaw(ugTabOf(id)); setTimeout(() => { const el = document.getElementById(id); el && el.scrollIntoView({ behavior: CALM ? "auto" : "smooth" }); }, 120); };
       if (home !== world || view !== "world") goWorld(home, 0, 0, jump); else jump();
       return;
@@ -2186,7 +2502,7 @@ function Main({ session, mode, setMode }) {
                   <span className="a">{w.amt ? (w.kind === "income" ? "+" : "") + money(w.amt) : ""}</span>
                   <span className="ck"><Tick /></span>
                 </button>
-                <button className="qedit" aria-label={"More options for " + w.title} onClick={() => w.kind === "task" ? setSheet({ type: "task", task: w.row }) : w.kind === "income" ? setSheet({ type: "income" }) : setSheet({ type: "debt-detail", entity: w.row.entity_name })}>⋯</button>
+                <button className="qedit" aria-label={"More options for " + w.title} onClick={() => w.kind === "task" ? setSheet({ type: "task", task: w.row }) : w.kind === "income" ? setSheet({ type: "income" }) : w.row.category === "Bill" ? setSheet({ type: "bill", bill: (settings.bills || []).find(b => b.name === w.row.entity_name) || null }) : w.row.category === "Parents" ? setSheet({ type: "parents-plan" }) : setSheet({ type: "debt-detail", entity: w.row.entity_name })}>⋯</button>
               </div>
             ))}
             <form className="addrow" onSubmit={e => { e.preventDefault(); const t = newTask.trim(); if (!t) return; act.addTask(t, newDue); setNewTask(""); setNewDue(""); }}>
@@ -2211,9 +2527,8 @@ function Main({ session, mode, setMode }) {
         <Stages currentIdx={calc.stageIdx} />
 
         <section className="block wrap" id="debts">
-          <div className="sechead"><Scramble text="MONEY" /><span className="idx">net worth<br /><b className={calc.netWorth < 0 ? "neg" : ""}>{fmt(calc.netWorth)}</b></span></div>
+          <div className="sechead"><Scramble text="DEBTS" /><span className="idx">net worth<br /><b className={calc.netWorth < 0 ? "neg" : ""}>{fmt(calc.netWorth)}</b></span></div>
           <div className="nw reveal"><span>Savings {fmt(calc.potsSum)}</span><span>+ cash {calc.cash == null ? "—" : fmt(calc.cash)}</span><span>− debts {fmt(calc.remaining)}</span></div>
-          <div className="duo money-duo"><div>
           <div className="stack reveal" aria-label="What's left, by debt">
             {[...calc.debts.filter(g => g.left > .005).map(g => [g.name, g.left]), ...(calc.phoneLeft > .005 ? [["Phone contracts", calc.phoneLeft]] : [])].map(([n, l]) => <div key={n} title={`${n} ${fmt(l, 2)}`} style={{ flexGrow: l }} />)}
           </div>
@@ -2231,9 +2546,11 @@ function Main({ session, mode, setMode }) {
             </div>}
             <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "debt" })}>+ Add a debt</button><button className="chip-btn" onClick={() => setSheet({ type: "due-days" })}>Due dates</button><button className="chip-btn" onClick={() => setSheet({ type: "income" })}>Income</button><button className="chip-btn" onClick={() => setSheet({ type: "cash" })}>Cash in bank</button></div>
           </div>
+        </section>
 
-          </div><div>
-          <div className="budget reveal" style={{ marginTop: 26 }}>
+        <section className="block wrap" id="spend">
+          <div className="sechead"><Scramble text="SPEND" /><span className="idx">budget<br /><b>{fmt(settings.budget)}</b> a month</span></div>
+          <div className="budget reveal">
             <div className="row"><span className="caps mute">Spent in {MONTHS[today.getMonth()]}</span><span className="caps mute">budget {fmt(settings.budget)}</span></div>
             <div className="row"><span className="v"><Count to={calc.spentTotal} /></span><span className="num">{calc.spentTotal <= settings.budget ? fmt(settings.budget - calc.spentTotal) + " left" : fmt(calc.spentTotal - settings.budget) + " over"}</span></div>
             <div className={"meter" + (calc.spentTotal > settings.budget ? " over" : "")}><i style={{ width: Math.min(100, calc.spentTotal / settings.budget * 100) + "%" }} /></div>
@@ -2243,8 +2560,10 @@ function Main({ session, mode, setMode }) {
               {d.spend.slice(0, 6).map(s => <div key={s.id}><button className="rowbtn" onClick={() => setSheet({ type: "spend-edit", entry: s })}>{dayLabel(parseDate(s.spent_on))} · {s.category}</button><span className="num">{money(Number(s.amount))}</span></div>)}
             </div>}
           </div>
-          </div></div>
+        </section>
 
+        <section className="block wrap" id="pots">
+          <div className="sechead"><Scramble text="POTS" /><span className="idx">saved<br /><b>{fmt(calc.potsSum)}</b></span></div>
           <div className="pots reveal">
             {d.pots.map(p => (
               <button className="pot" key={p.id} onClick={() => setSheet({ type: "pot", pot: p })} aria-label={`Open ${potName(p)}`}>
@@ -2256,6 +2575,9 @@ function Main({ session, mode, setMode }) {
             <button className="pot pot-new" onClick={() => setSheet({ type: "new-pot" })}><span className="plus">+</span><b>New pot</b><small>Hajj, wedding, BTO…</small></button>
           </div>
         </section>
+
+        <BillsSection d={d} settings={settings} today={today} act={act} setSheet={setSheet} />
+        <ParentsSection d={d} settings={settings} today={today} act={act} setSheet={setSheet} />
 
         <section className="block wrap" id="history">
           <div className="sechead"><Scramble text="HISTORY" /><span className="idx">month by month</span></div>
@@ -2303,6 +2625,9 @@ function Main({ session, mode, setMode }) {
       {sheet?.type === "study" && <StudySheet onClose={() => setSheet(null)} onSave={act.logStudy} />}
       {sheet?.type === "debt" && <DebtSheet names={Object.keys(calc.ents)} onClose={() => setSheet(null)} onSave={act.addDebt} />}
       {sheet?.type === "debt-detail" && calc.ents[sheet.entity] && <DebtDetail entity={sheet.entity} rows={calc.ents[sheet.entity].rows} today={today} onClose={() => setSheet(null)} act={act} />}
+      {sheet?.type === "bill" && <BillSheet bill={sheet.bill} bills={settings.bills || []} today={today} onClose={() => setSheet(null)} act={act} />}
+      {sheet?.type === "parents-plan" && <ParentsPlanSheet settings={settings} onClose={() => setSheet(null)} act={act} />}
+      {sheet?.type === "parents-extra" && <NumSheet title="Give Mum & Dad extra" hint="Raya, birthdays, or just because. It's counted as money out today." cta="Given" onClose={() => setSheet(null)} onSave={v => { setSheet(null); if (v > 0) act.giveParents(v); }} />}
       {sheet?.type === "due-days" && <DueDaysSheet ents={calc.ents} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "income" && <IncomeSheet rows={calc.inc} settings={settings} today={today} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "cash" && <CashSheet cash={calc.cash} onClose={() => setSheet(null)} onSave={act.setCash} />}

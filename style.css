@@ -1037,3 +1037,18 @@ html[data-world=ug] .toast.undo button{background:#02050c;color:var(--cy);border
 .dd-pay .field{font:600 14px var(--sans);text-align:left;padding:8px}
 .dd-pay.ch .field{border-color:var(--gr);box-shadow:0 0 8px rgba(140,255,63,.3)}
 .dd-pay{grid-template-columns:84px 1fr}.dd-pay .field{width:100%;min-width:0}.dd-pays{padding-left:18px}
+.dd-pay .field.mini{width:100%!important;max-width:none!important;flex:1}
+/* v15: new tabs */
+.ug-pages[data-tab=bills] #bills,.ug-pages[data-tab=spend] #spend,.ug-pages[data-tab=pots] #pots,.ug-pages[data-tab=parents] #parents,.ug-pages[data-tab=habits] #habits{display:block}
+.hb-week{display:flex;align-items:center;gap:4px;margin-top:4px}
+.hb-week i{width:10px;height:10px;border:1px solid rgba(127,146,173,.5);transform:skewX(-14deg)}
+.hb-week i.on{background:var(--gr);border-color:var(--gr);box-shadow:0 0 6px rgba(140,255,63,.6)}
+.hb-week em{font-style:normal;margin-left:8px;color:var(--mute);font-size:11.5px}
+html[data-world=ug] .quest.done .hb-week em,html[data-world=ug] .quest.done .hb-week{opacity:1;text-decoration:none}
+#parents .safe-v,#bills .stats .v{text-shadow:0 0 18px rgba(140,255,63,.35)}
+html[data-world=ug] .ug-pages #pots .pots{margin-top:6px}
+.ug-tabs .tb{justify-content:flex-start}.ug-tabs .tb>:first-child{margin-left:auto}.ug-tabs .tb>:last-child{margin-right:auto}
+.ug-pages:not([data-tab=history]) footer{display:none}
+.ug-pages[data-tab=checklist] #checklist,.ug-pages[data-tab=review] #review,.ug-pages[data-tab=why] #why{display:block}
+#streak .safe-v{font:italic 900 56px/1 var(--disp);color:#fff;text-shadow:0 0 22px rgba(140,255,63,.45)}
+#grove .safe-v{font:italic 900 44px/1.1 var(--disp);color:#fff;margin:6px 0 10px}
