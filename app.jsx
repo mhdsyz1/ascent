@@ -634,7 +634,9 @@ function SpendEditSheet({ entry, cats, onClose, act }) {
 
 /* ---------------- payday split ---------------- */
 function PaydaySheet({ amount, bills, nextDate, settings, pots, onClose, onConfirm }) {
-  const firstOpen = pots.find(p => p.goal && Number(p.balance) < Number(p.goal)) || pots[0];
+  const early = ymd(new Date()) < (settings.ord || "9999"); // no Rewards pot money during NS
+  const byOrder = [...pots].sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  const firstOpen = byOrder.find(p => p.goal && Number(p.balance) < Number(p.goal) && !(early && /^rewards$/i.test(p.name))) || byOrder[0];
   const [living, setLiving] = useState(String(settings.budget)); const [fun, setFun] = useState(String(settings.guiltFree));
   const leftover = r2(amount - bills - (num(living) || 0) - (num(fun) || 0));
   const [save, setSave] = useState(String(Math.max(0, leftover))); const [potId, setPotId] = useState(firstOpen ? firstOpen.id : "");
@@ -979,6 +981,107 @@ function habitScore(settings, key, today) {
   return can ? { did, can } : null;
 }
 
+/* ---------- Life → Rewards (earn it, cash only; redeeming takes money from the Rewards/Car fund pot only) ---------- */
+const REWARD_POT = "Rewards", CAR_POT = "Car fund";
+const REWARDS_NS = [
+  { id: "t-bmt", name: "BMT pass-out", gift: "A nice meal out", max: 30, when: "Jan 2027", need: c => [["BMT pass-out milestone ticked", c.ms(/^BMT passed out/i)]] },
+  { id: "t-debt", name: "Debt-free", gift: "Dinner with Mum & Dad", max: 80, when: "Aug 2027", need: c => [["Every loan and BNPL cleared", c.debtFree]] },
+  { id: "t-netplus", name: "Network+ passed", gift: "Something for your setup", max: 50, when: "~Sep 2027", need: c => [["Network+ passed milestone ticked", c.ms(/^Network\+ passed/i)]] },
+  { id: "t-secplus", name: "Security+ passed", gift: "Something for your setup", max: 50, when: "~Jul 2028", need: c => [["Security+ passed milestone ticked", c.ms(/^Security\+ passed/i)]] },
+  { id: "t-ord", name: "ORD", gift: "A day out, your choice", max: 100, when: "Sep 2028", need: c => [["ORD day reached", c.ordDone]] },
+];
+const REWARDS_BIG = [
+  { id: "l1", lv: 1, name: "Rising Sun", gift: "Japan trip · Tokyo / Fuji", cost: 2500, when: "2030", pot: REWARD_POT, need: c => [["1 year in your job", c.jobYear], ["Emergency fund at least half full", c.emerg(0.5)]] },
+  { id: "l2", lv: 2, name: "Family", gift: "Trip with Mum & Dad", cost: 1500, when: "2031", pot: REWARD_POT, need: c => [["Emergency fund full", c.emerg(1)]] },
+  { id: "l3", lv: 3, name: "Flagship", gift: "iPhone Pro Max, bought outright", cost: 2200, when: "2031–32", pot: REWARD_POT, need: () => [] },
+  { id: "l4", lv: 4, name: "Timekeeper", gift: "Grand Seiko", cost: 15000, when: "~2034–35", pot: REWARD_POT, need: c => [["Degree completed", c.ms(/^Degree completed/i)]] },
+  { id: "l5", lv: 5, name: "Own a BMW", gift: "Used BMW, paid in cash", cost: 0, when: "~2036+", pot: CAR_POT, need: c => [["BTO keys collected", c.ms(/^BTO keys/i)], ["Mum & Dad's Hajj paid", c.ms(/hajj paid/i)]] },
+  { id: "l6", lv: 6, name: "M Power", gift: "BMW M4", cost: 0, when: "40s", pot: CAR_POT, need: () => [] },
+];
+const rewardCtx = (d, calc, settings, today) => {
+  const job = d.ms.find(m => m.done && /^Started an office-hours/i.test(m.title));
+  const em = d.pots.find(p => /emergency/i.test(p.name));
+  return {
+    ms: rx => d.ms.some(m => m.done && rx.test(m.title)),
+    debtFree: calc.debts.length > 0 && calc.debts.every(e => e.left < .005),
+    ordDone: ymd(today) >= (settings.ord || "9999"),
+    jobYear: !!(job && job.done_at) && diffDays(today, startOfDay(new Date(job.done_at))) >= 365,
+    emerg: f => !!em && Number(em.goal) > 0 && Number(em.balance) >= Number(em.goal) * f,
+    pot: name => d.pots.find(p => (p.name || "").toLowerCase() === name.toLowerCase()),
+    got: settings.rewards || {},
+  };
+};
+const rewardState = (r, c) => {
+  const got = c.got[r.id];
+  if (got) return { state: got.skipped ? "skipped" : "done", got, checks: [] };
+  if (!r.lv) { const checks = r.need(c); return { state: checks.every(x => x[1]) ? "ready" : "locked", checks, cost: r.max }; }
+  const i = REWARDS_BIG.indexOf(r), prev = i === 0 || !!c.got[REWARDS_BIG[i - 1].id];
+  const pot = c.pot(r.pot), cost = r.cost || (pot && Number(pot.goal)) || 0;
+  const checks = [...(i > 0 ? [[`Level ${i} redeemed or skipped`, prev]] : []), ...r.need(c),
+    [cost ? `${r.pot} pot has ${fmt(cost)}` : `${r.pot} pot with the car's price as its goal`, !!pot && cost > 0 && Number(pot.balance) >= cost]];
+  return { state: checks.every(x => x[1]) ? "ready" : "locked", checks, cost, pot, current: prev };
+};
+const rewardsReady = (d, calc, settings, today) => {
+  const c = rewardCtx(d, calc, settings, today);
+  return [...REWARDS_NS, ...REWARDS_BIG].map(r => ({ r, st: rewardState(r, c) })).filter(x => x.st.state === "ready");
+};
+const RW_TAG = { locked: "🔒 Locked", ready: "Ready", done: "Redeemed ✓", skipped: "Skipped" };
+function RewardCard({ r, st, setSheet }) {
+  return (
+    <div className={"budget rw " + st.state}>
+      <div className="rw-top"><span className="caps mute">{r.lv ? "Level " + r.lv : "NS treat"} · {r.when}</span><span className={"rw-tag " + st.state}>{RW_TAG[st.state]}</span></div>
+      <h4>{r.name}</h4>
+      <div className="mute small">{r.gift} · {r.lv ? (st.cost || r.cost ? fmt(st.cost || r.cost) : "car price") : "up to " + fmt(r.max)}</div>
+      {st.checks.length > 0 && <div className="rw-checks">{st.checks.map(([t, ok]) => <div key={t} className={"quest-line" + (ok ? " ok" : "")}><span className="qk">{ok ? "✓" : "·"}</span>{t}</div>)}</div>}
+      {st.state === "done" && <div className="rw-when">Redeemed {dayYr(parseDate(st.got.at))} · {fmt(st.got.amount, 2)}</div>}
+      {st.state === "ready" && <button className="solid rw-go" onClick={() => setSheet({ type: "reward", r, st })}>Redeem</button>}
+      {r.lv && st.state === "locked" && st.current && <button className="signout rw-skip" onClick={() => setSheet({ type: "reward", r, st, skip: true })}>Skip this level</button>}
+    </div>
+  );
+}
+function RewardsSection({ d, calc, settings, today, setSheet }) {
+  const c = rewardCtx(d, calc, settings, today);
+  const pot = c.pot(REWARD_POT);
+  const next = REWARDS_BIG.find(r => !c.got[r.id]);
+  const nextCost = next && next.pot === REWARD_POT ? next.cost : 0;
+  const n = Object.values(c.got).filter(g => !g.skipped).length;
+  return (
+    <section className="block wrap" id="rewards">
+      <div className="sechead"><Scramble text="REWARDS" /><span className="idx">earn it · cash only<br />{n} redeemed</span></div>
+      <div className="budget reveal">
+        <div className="caps mute">Rewards pot</div>
+        {pot ? <>
+          <div className="row"><span className="v num">{fmt(pot.balance, 2)}</span><span className="num">{nextCost ? `next: ${next.name} ${fmt(nextCost)}` : ""}</span></div>
+          <div className="meter"><i style={{ width: (nextCost ? Math.min(100, Number(pot.balance) / nextCost * 100) : 0) + "%" }} /></div>
+        </> : null}
+        <p className="mute small">{pot ? "" : "The Rewards pot fills from your first salary. "}5% of take-home from your first job, 10% after your degree. Redeeming takes money out of the Rewards pot only: Buffer, Emergency, investing, degree and Mum &amp; Dad stay untouched.</p>
+      </div>
+      <div className="rw-h reveal">During NS · from guilt-free money</div>
+      <div className="rw-grid reveal">{REWARDS_NS.map(r => <RewardCard key={r.id} r={r} st={rewardState(r, c)} setSheet={setSheet} />)}</div>
+      <div className="rw-h reveal">The ladder · from the Rewards pot</div>
+      <div className="rw-grid reveal">{REWARDS_BIG.map(r => <RewardCard key={r.id} r={r} st={rewardState(r, c)} setSheet={setSheet} />)}</div>
+      <p className="mute small reveal" style={{ marginTop: 12 }}>Cash only. No BNPL, no instalments, no phone contracts. A reward opens only when its milestone is done and the money is already in the pot. Your licence and Umrah with Mum &amp; Dad are goals, not prizes: they live in Journey and Family.</p>
+    </section>
+  );
+}
+function RewardSheet({ r, st, skip, onClose, act }) {
+  const max = r.lv ? Number((st.pot && st.pot.balance) || 0) : r.max;
+  const [amt, setAmt] = useState(String(r.lv ? st.cost : r.max)); const [sure, setSure] = useState(false);
+  const a = num(amt);
+  if (skip) return (
+    <Sheet title={`Skip level ${r.lv}?`} hint={`${r.name} (${r.gift}) is marked skipped and level ${r.lv + 1} opens. The money stays in the pot.`} onClose={onClose}>
+      <button className="solid" onClick={() => { act.redeemReward(r, 0, null, true); onClose(); }}>Skip {r.name}</button>
+    </Sheet>);
+  return (
+    <Sheet title={`Redeem · ${r.name}`} hint={r.lv ? `${r.gift}. Comes out of your ${r.pot} pot only.` : `${r.gift}. Paid from guilt-free money, up to ${fmt(r.max)}.`} onClose={onClose}>
+      <Field id="rw-a" label="What it actually cost ($)" inputMode="decimal" value={amt} onChange={e => setAmt(e.target.value)} />
+      <label className="rw-sure"><input type="checkbox" checked={sure} onChange={e => setSure(e.target.checked)} /><span>I'm paying in cash. No BNPL, no instalments. Buffer, Emergency, investing, degree and Mum &amp; Dad money stay untouched.</span></label>
+      {a > max && <p className="mute small">{r.lv ? `Your ${r.pot} pot has ${fmt(max, 2)}.` : `Keep it within ${fmt(r.max)}.`}</p>}
+      <button className="solid" style={{ marginTop: 10 }} disabled={!(a > 0 && a <= max && sure)} onClick={() => { act.redeemReward(r, r2(a), r.lv ? st.pot : null); onClose(); }}>Redeem{a > 0 ? " " + fmt(a, 2) : ""}</button>
+    </Sheet>
+  );
+}
+
 /* ---------------- Guide: next steps + how-to (works without AI) ---------------- */
 const HOWTO = [
   { q: "Add a debt (BNPL, PayLater, loan, phone contract)", k: "add debt new bnpl paylater grab atome loan owe borrow phone", a: ["Money → + Add a debt.", "Name it (must be different from existing debts, e.g. GrabFood), pick the type.", "Monthly payment, how many payments are left, next payment date.", "One-off? Set payments left to 1.", "Pick 'One I already had' or 'New borrowing' honestly, then Add debt."], go: "debt", btn: "Add a debt" },
@@ -1002,6 +1105,7 @@ const HOWTO = [
   { q: "The four worlds", k: "worlds tabs money invest career life portal dock switch", a: ["The bar at the bottom switches worlds: Money (bills, debts, pots), Invest (the Grove), Career (study, path, to-dos) and Life (streak, family, milestones).", "Invest levels up by months planted in a row, never by prices."], go: "scroll:grove", btn: "Visit the Grove" },
   { q: "Log spending from the home screen", k: "shortcut home screen quick log spend fast pause urge", a: ["Android: press and hold the Ascent icon, then tap Log spend (or Pause). Drag it out to make its own icon.", "iPhone: open the app in Safari with ?do=spend at the end of the address, then Share → Add to Home Screen. That icon opens straight to Log spending."], go: "spend", btn: "Log spend now" },
   { q: "Change the name or reasons shown", k: "name arabic reasons why private settings about you", a: ["Settings → About you.", "These live only in your locked database, not in the public code."], go: "settings", btn: "Open Settings" },
+  { q: "Rewards", k: "reward redeem treat japan trip iphone grand seiko watch bmw m4 car ladder unlock", a: ["Life → Rewards.", "NS treats unlock with milestones (BMT, debt-free, Network+, Security+, ORD) and come from guilt-free money.", "After ORD, the ladder is paid from the Rewards pot (5% of take-home, 10% after your degree).", "When a reward is ready, Telegram tells you. Tap Redeem, type what it cost: it comes out of that pot only, never your savings."] },
   { q: "Telegram reminders", k: "telegram reminder bot notification 8pm", a: ["Set up once with TELEGRAM-GUIDE.md.", "You get one message at 8pm when something is coming up: bills due tomorrow, payday, to-dos (30 days, 7 days and 1 day before, and when overdue) and milestones (30 and 7 days before).", "Any to-do you give a date is reminded automatically.", "Test: Settings → Send a test message."], go: "settings", btn: "Open Settings" },
   { q: "Undo a mistake", k: "undo mistake wrong tap", a: ["After ticking anything, press Undo on the black bar (7 seconds).", "Later: tap it again to untick, or edit it (Money → tap the debt/entry)."], go: null },
   { q: "No signal in camp", k: "offline signal camp no internet sync", a: ["The app still opens and shows your last data.", "Anything you tick or log is saved on your phone and syncs when you're back online."], go: null },
@@ -1022,6 +1126,7 @@ function nextSteps(d, calc, settings, status) {
     const amt = Math.max(5, Math.floor(Math.min(calc.safe - 40, Number(buf.goal) - Number(buf.balance)) / 5) * 5);
     out.push({ t: `Move ${fmt(amt)} into your Buffer`, s: `${fmt(buf.balance)} of ${fmt(buf.goal)}. You can spare it and still cover bills.`, go: "pot:" + buf.id, btn: "Open Buffer" });
   }
+  rewardsReady(d, calc, settings, today).slice(0, 1).forEach(x => out.push({ t: `Reward ready: ${x.r.name}`, s: `${x.r.gift}. You earned it. Redeem it in Life → Rewards.`, go: "scroll:rewards", btn: "Open Rewards" }));
   const lastSpend = d.spend[0] ? parseDate(d.spend[0].spent_on) : null;
   if (!lastSpend || diffDays(today, lastSpend) >= 3) out.push({ t: "Log what you've spent", s: lastSpend ? `Nothing logged since ${dayLabel(lastSpend)}.` : "Nothing logged yet this month.", go: "spend", btn: "Log spending" });
   if (today >= parseDate(settings.studyStart) && calc.studyWeek < settings.studyTarget && [0, 6].includes(today.getDay())) out.push({ t: "Study session", s: `${(calc.studyWeek / 60).toFixed(1)} of ${settings.studyTarget / 60} h this week.`, go: "study", btn: "Log study" });
@@ -1376,6 +1481,7 @@ function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmRe
           </div>
           <p className="mute small reveal" style={{ marginTop: 12 }}>Stages 4–5 of the plan live here: your parents' Hajj, their renovation, BTO, a wedding. Each gets a pot when its time comes.</p>
         </section>
+        <RewardsSection d={d} calc={calc} settings={settings} today={today} setSheet={setSheet} />
         <section className="block wrap" id="milestones">
           <div className="sechead"><Scramble text="THE JOURNEY" /><span className="idx">{d.ms.filter(m => m.done).length} of {d.ms.length}<br />some tick themselves</span></div>
           <div className="typechips reveal" style={{ marginBottom: 8 }}>{[["all", "All"], ...WORLDS.map(w => [w.id, w.name])].map(([k, l]) => <button key={k} className={"cat" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>{l}</button>)}</div>
@@ -1427,7 +1533,7 @@ const UG_TABS = {
   money: [["week", "Week"], ["climb", "Climb"], ["debts", "Debts"], ["bills", "Bills"], ["spend", "Spend"], ["pots", "Pots"], ["parents", "Parents"], ["history", "History"]],
   invest: [["grove", "This month"], ["checklist", "Checklist"], ["own", "Own"], ["learn", "Learn"], ["badges", "Badges"], ["rules", "Rules"], ["review", "Review"]],
   career: [["study", "Study"], ["path", "Path"], ["todo", "To-dos"], ["employers", "Jobs"]],
-  life: [["streak", "Streak"], ["why", "Why"], ["habits", "Habits"], ["family", "Family"], ["milestones", "Journey"]],
+  life: [["streak", "Streak"], ["why", "Why"], ["habits", "Habits"], ["family", "Family"], ["rewards", "Rewards"], ["milestones", "Journey"]],
 };
 const ugTabOf = id => (id === "ascent" || id === "top" ? "climb" : id === "streaks" ? "streak" : id);
 const UG_IMG = id => `https://images.unsplash.com/photo-${id}?w=${innerWidth > 900 ? 900 : 640}&q=62&auto=format&fit=crop`;
@@ -1725,7 +1831,7 @@ function monthReport(d, settings, key, today) {
   const inKey = s => String(s || "").slice(0, 7) === key;
   const due = d.sched.filter(r => isOblig(r) && inKey(r.month_date) && rowDate(r) <= upto);
   const onTime = due.filter(r => r.is_cleared && (!r.paid_on || parseDate(r.paid_on) <= rowDate(r)));
-  const spend = d.spend.filter(s => inKey(s.spent_on)).reduce((a, s) => a + Number(s.amount), 0);
+  const spend = d.spend.filter(s => inKey(s.spent_on) && s.category !== "Reward").reduce((a, s) => a + Number(s.amount), 0);
   const budget = Number(settings.budget) || 0;
   const studyMin = d.study.filter(s => inKey(s.studied_on)).reduce((a, s) => a + s.minutes, 0);
   const sStart = parseDate(settings.studyStart || "2099-01-01");
@@ -2042,7 +2148,7 @@ function Main({ session, mode, setMode }) {
     const later = tasksOpen.filter(t => t.due_date && parseDate(t.due_date) > end);
     const soon = sched.filter(r => !r.is_cleared && r._dt > end && r._dt <= addDays(end, 30)).sort((a, b) => a._dt - b._dt);
     const spentMonth = d.spend.filter(s => s.spent_on.slice(0, 7) === monthKey);
-    const spentTotal = spentMonth.reduce((s, x) => s + Number(x.amount), 0);
+    const spentTotal = spentMonth.filter(x => x.category !== "Reward").reduce((s, x) => s + Number(x.amount), 0); // rewards come from guilt-free money, not the budget
     const byCat = {}; spentMonth.forEach(s => byCat[s.category] = (byCat[s.category] || 0) + Number(s.amount));
     const mon = addDays(today, -((today.getDay() + 6) % 7));
     const studyWeek = d.study.filter(s => parseDate(s.studied_on) >= mon).reduce((s, x) => s + x.minutes, 0);
@@ -2132,6 +2238,20 @@ function Main({ session, mode, setMode }) {
     if (!rows.length) return;
     setD(x => ({ ...x, sched: [...x.sched, ...rows] }));
     write([{ t: "insert", table: "cashflow_schedule", row: rows }]).catch(() => {});
+  }, [d, calc]);
+
+  /* a reward just became ready: add a to-do due tomorrow so Telegram tells you tonight */
+  const rwSig = useRef("");
+  useEffect(() => {
+    if (!d || !calc || status === "offline" || !navigator.onLine) return;
+    const seen = settings.rewardsNotified || [];
+    const fresh = rewardsReady(d, calc, settings, today).filter(x => !seen.includes(x.r.id));
+    if (!fresh.length) return;
+    const sig = fresh.map(x => x.r.id).join(); if (rwSig.current === sig) return; rwSig.current = sig;
+    const rows = fresh.map(x => ({ id: uid(), title: `Reward unlocked: ${x.r.name} (${x.r.gift}). Redeem it in Life > Rewards`, due_date: ymd(addDays(today, 1)), done: false, area: "life" }));
+    const merged = { ...settings, rewardsNotified: [...seen, ...fresh.map(x => x.r.id)] };
+    setD(x => ({ ...x, tasks: [...x.tasks, ...rows], state: { ...x.state, settings: merged } }));
+    write([{ t: "insert", table: "ascent_tasks", row: rows }, { t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] }]).catch(() => {});
   }, [d, calc]);
 
   /* new month: show last month's report card once */
@@ -2275,6 +2395,26 @@ function Main({ session, mode, setMode }) {
       if (await commit([{ t: "update", table: "ascent_milestones", patch, f: [["eq", "id", m.id]] }]) && next) setParty(msParty(m, ev ? ev.clientX : innerWidth / 2, ev ? ev.clientY : innerHeight / 2));
     },
     addMs: async p => { setSheet(null); const row = { id: uid(), sort: (d.ms.reduce((mx, m) => Math.max(mx, m.sort || 0), 0) + 10), done: false, ...p }; setD(s => ({ ...s, ms: [...s.ms, row] })); if (await commit([{ t: "insert", table: "ascent_milestones", row }])) flash("Milestone added"); },
+    redeemReward: async (r, amount, pot, skip) => {
+      const rewards = { ...(settings.rewards || {}), [r.id]: skip ? { at: ymd(today), skipped: true } : { at: ymd(today), amount } };
+      const merged = { ...settings, rewards };
+      const ops = [];
+      let mv = null, sp = null;
+      if (!skip && pot) { mv = { id: uid(), pot_id: pot.id, amount: -amount, reason: "Reward: " + r.gift }; ops.push({ t: "insert", table: "ascent_pot_moves", row: mv }, { t: "update", table: "wealth_portfolio", patch: { balance: r2(Number(pot.balance) - amount) }, f: [["eq", "id", pot.id]] }); }
+      if (!skip && !pot) { sp = { id: uid(), amount, category: "Reward", spent_on: ymd(today) }; ops.push({ t: "insert", table: "ascent_spend", row: sp }, ...cashOps(-amount)); }
+      const note = d.tasks.filter(t => !t.done && t.title.startsWith(`Reward unlocked: ${r.name} (`));
+      note.forEach(t => ops.push({ t: "update", table: "ascent_tasks", patch: { done: true, done_at: new Date().toISOString() }, f: [["eq", "id", t.id]] }));
+      ops.push({ t: "update", table: "ascent_state", patch: { settings: merged }, f: [["eq", "id", 1]] });
+      setD(x => ({ ...x, state: { ...x.state, settings: merged },
+        pots: mv ? x.pots.map(p => p.id === pot.id ? { ...p, balance: r2(Number(p.balance) - amount) } : p) : x.pots,
+        moves: mv ? [{ ...mv, created_at: new Date().toISOString() }, ...x.moves] : x.moves,
+        spend: sp ? [sp, ...x.spend] : x.spend,
+        tasks: x.tasks.map(t => note.some(n => n.id === t.id) ? { ...t, done: true, done_at: new Date().toISOString() } : t) }));
+      if (await commit(ops)) {
+        if (skip) flash(`${r.name} skipped. Level ${r.lv + 1} is open.`);
+        else { Sound.win(); setParty({ x: innerWidth / 2, y: innerHeight / 2, kicker: "REWARD REDEEMED", line1: r.name.toUpperCase(), line2: "EARNED.", text: `${r.gift}. ${fmt(amount, 2)}, paid in cash. You earned this.` }); }
+      }
+    },
     patchSettings: (patch, msg) => { // quiet settings save (habits, bills, parents)
       const merged = { ...settings, ...patch };
       setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
@@ -2356,7 +2496,7 @@ function Main({ session, mode, setMode }) {
     const [k, v] = go.split(/:(.+)/);
     if (k === "scroll") {
       const id = v === "streaks" ? "streak" : v;
-      const home = { week: "money", ascent: "money", top: "money", debts: "money", history: "money", bills: "money", spend: "money", pots: "money", parents: "money", habits: "life", why: "life", checklist: "invest", review: "invest", own: "invest", learn: "invest", streak: "life", family: "life", milestones: "life", study: "career", path: "career", todo: "career", grove: "invest", badges: "invest", rules: "invest" }[id] || "money";
+      const home = { week: "money", ascent: "money", top: "money", debts: "money", history: "money", bills: "money", spend: "money", pots: "money", parents: "money", habits: "life", why: "life", checklist: "invest", review: "invest", own: "invest", learn: "invest", streak: "life", family: "life", rewards: "life", milestones: "life", study: "career", path: "career", todo: "career", grove: "invest", badges: "invest", rules: "invest" }[id] || "money";
       const jump = () => { setTabRaw(ugTabOf(id)); setTimeout(() => { const el = document.getElementById(id); el && el.scrollIntoView({ behavior: CALM ? "auto" : "smooth" }); }, 120); };
       if (home !== world || view !== "world") goWorld(home, 0, 0, jump); else jump();
       return;
@@ -2626,6 +2766,7 @@ function Main({ session, mode, setMode }) {
       {sheet?.type === "debt" && <DebtSheet names={Object.keys(calc.ents)} onClose={() => setSheet(null)} onSave={act.addDebt} />}
       {sheet?.type === "debt-detail" && calc.ents[sheet.entity] && <DebtDetail entity={sheet.entity} rows={calc.ents[sheet.entity].rows} today={today} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "bill" && <BillSheet bill={sheet.bill} bills={settings.bills || []} today={today} onClose={() => setSheet(null)} act={act} />}
+      {sheet?.type === "reward" && <RewardSheet r={sheet.r} st={sheet.st} skip={sheet.skip} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "parents-plan" && <ParentsPlanSheet settings={settings} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "parents-extra" && <NumSheet title="Give Mum & Dad extra" hint="Raya, birthdays, or just because. It's counted as money out today." cta="Given" onClose={() => setSheet(null)} onSave={v => { setSheet(null); if (v > 0) act.giveParents(v); }} />}
       {sheet?.type === "due-days" && <DueDaysSheet ents={calc.ents} onClose={() => setSheet(null)} act={act} />}

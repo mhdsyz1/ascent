@@ -1052,3 +1052,35 @@ html[data-world=ug] .ug-pages #pots .pots{margin-top:6px}
 .ug-pages[data-tab=checklist] #checklist,.ug-pages[data-tab=review] #review,.ug-pages[data-tab=why] #why{display:block}
 #streak .safe-v{font:italic 900 56px/1 var(--disp);color:#fff;text-shadow:0 0 22px rgba(140,255,63,.45)}
 #grove .safe-v{font:italic 900 44px/1.1 var(--disp);color:#fff;margin:6px 0 10px}
+.ug-pages[data-tab=own] #own,.ug-pages[data-tab=learn] #learn{display:block}
+.own-grid{display:grid;gap:10px}@media(min-width:760px){.own-grid{grid-template-columns:repeat(3,1fr)}}
+.own h4{font:italic 900 24px var(--disp);text-transform:uppercase;margin:4px 0 6px;color:#fff}
+.own-names{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.own-names span{padding:5px 10px;border:1px solid var(--line);font:700 12px var(--sans);background:rgba(6,17,42,.7)}
+.learn.locked{opacity:.5}.learn summary{cursor:pointer}
+.rev-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0 6px}
+.rev-grid>div{display:flex;flex-direction:column;gap:2px;padding:8px;border:1px solid rgba(63,230,255,.15);background:rgba(0,0,0,.2)}
+.rev-grid b{font:italic 800 17px var(--disp);color:#fff}.rev-grid b.gr{color:var(--gr)}.rev-grid b.pk{color:var(--pk)}
+/* ---- Life → Rewards ---- */
+.ug-pages[data-tab=rewards] #rewards{display:block}
+.rw-h{font:800 11px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--cy);margin:22px 0 10px}
+.rw-grid{display:grid;gap:10px}
+@media(min-width:760px){.rw-grid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:1100px){.rw-grid{grid-template-columns:repeat(3,1fr)}}
+.rw{display:flex;flex-direction:column;gap:4px}
+.rw-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rw h4{font:italic 900 24px var(--disp);text-transform:uppercase;margin:2px 0 0;color:#fff}
+.rw-tag{font:800 10.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+.rw-tag.ready{color:#02050c;background:var(--gr);border-color:var(--gr)}
+.rw-tag.done{color:var(--gr);border-color:var(--gr)}
+.rw-tag.skipped{color:var(--mute);border-style:dashed}
+.rw.locked{opacity:.78}
+html[data-world=ug] .rw.ready{border-color:var(--gr);box-shadow:0 0 0 1px rgba(140,255,63,.35),0 0 24px rgba(140,255,63,.12)}
+html[data-world=ug] .rw.done{border-color:rgba(140,255,63,.45)}
+.rw-checks{margin-top:6px}
+.rw-checks .quest-line{padding:6px 0;font-size:13px}
+.rw-when{font:700 12.5px var(--sans);color:var(--gr);margin-top:6px}
+.rw-go{margin-top:10px}
+.rw-skip{margin-top:8px;align-self:flex-start}
+.rw-sure{display:flex;gap:10px;align-items:flex-start;margin:12px 0 4px;font-size:13.5px;line-height:1.45;color:var(--ink);cursor:pointer}
+.rw-sure input{margin-top:3px;width:18px;height:18px;accent-color:var(--gr);flex:none}
