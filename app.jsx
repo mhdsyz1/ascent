@@ -27,7 +27,7 @@ const sb = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE
 const DEFAULT_SETTINGS = { investRisk: "Aggressive", budget: 200, categories: ["Food", "Transport", "Smokes", "Other"], ord: "2028-09-30", studyStart: "2027-01-01", studyTarget: 240, guiltFree: 20, income: null };
 const STAGES = [
   { n: "01", t: "Stop the bleeding", w: "Clear all BNPL and credit", g: "$300 buffer, no new credit, loans paid down." },
-  { n: "02", t: "Stable", w: "Clear every debt", g: "Network+, first money to your parents, about $4,000 saved." },
+  { n: "02", t: "Stable", w: "Finish the phone contracts", g: "Network+, first money to your parents, about $2,000 saved by ORD." },
   { n: "03", t: "Build", w: "Fill the emergency fund", g: "Six months of expenses saved, investing on autopilot, a trip a year." },
   { n: "04", t: "Big items", w: "Parents, home, family", g: "Your parents' Hajj, their renovation, BTO, wedding." },
   { n: "05", t: "Freedom", w: "Long term", g: "Parents fully supported. $1M+." },
@@ -633,25 +633,36 @@ function SpendEditSheet({ entry, cats, onClose, act }) {
 }
 
 /* ---------------- payday split ---------------- */
-function PaydaySheet({ amount, bills, nextDate, settings, pots, onClose, onConfirm }) {
+function PaydaySheet({ amount, rows, act, nextDate, settings, pots, onClose, onConfirm }) {
   const early = ymd(new Date()) < (settings.ord || "9999"); // no Rewards pot money during NS
-  const byOrder = [...pots].sort((a, b) => (a.sort || 0) - (b.sort || 0));
-  const firstOpen = byOrder.find(p => p.goal && Number(p.balance) < Number(p.goal) && !(early && /^rewards$/i.test(p.name))) || byOrder[0];
+  const byOrder = [...pots].sort((a, b) => (a.sort || 0) - (b.sort || 0)).filter(p => !(early && /^rewards$/i.test(p.name)));
+  const firstOpen = byOrder.find(p => p.goal && Number(p.balance) < Number(p.goal)) || byOrder[0];
+  const [paid, setPaid] = useState([]);
+  const t0 = startOfDay(new Date());
+  const open = rows.filter(r => !paid.includes(r.id));
+  const late = open.filter(r => rowDate(r) < t0).sort((a, b) => rowDate(a) - rowDate(b));
+  const bills = r2(open.reduce((s, r) => s + Number(r.amount_due), 0));
   const [living, setLiving] = useState(String(settings.budget)); const [fun, setFun] = useState(String(settings.guiltFree));
   const leftover = r2(amount - bills - (num(living) || 0) - (num(fun) || 0));
   const [save, setSave] = useState(String(Math.max(0, leftover))); const [potId, setPotId] = useState(firstOpen ? firstOpen.id : "");
-  useEffect(() => { setSave(String(Math.max(0, leftover))); }, [living, fun]);
+  useEffect(() => { setSave(String(Math.max(0, leftover))); }, [living, fun, bills]);
   const s = num(save) || 0, rest = r2(leftover - s);
+  const markPaid = r => { act.toggleRow(r, null, true); setPaid(x => [...x, r.id]); };
   return (
     <Sheet title={`Payday · +${fmt(amount, 2)}`} hint="Give every dollar a job before it disappears." onClose={onClose} wide>
+      {late.length > 0 && <div className="pay-late">
+        <div className="caps mute">Not ticked yet · did you already pay these?</div>
+        {late.map(r => <div className="srow" key={r.id}><span>{dayLabel(rowDate(r))} · {r.entity_name} <b className="num">{fmt(r.amount_due, 2)}</b></span><button className="chip-btn solid2" onClick={() => markPaid(r)}>Paid ✓</button></div>)}
+        <p className="mute small">Tick the ones you've paid so they aren't counted twice. Leave the rest: they still need paying.</p>
+      </div>}
       <div className="split">
         <div className="srow"><span>Bills until {nextDate ? dayLabel(nextDate) : "next payday"}</span><b className="num">{fmt(bills, 2)}</b></div>
         <div className="srow"><span>Living money (food, transport, smokes)</span><input className="field mini" inputMode="decimal" value={living} onChange={e => setLiving(e.target.value)} aria-label="Living money" /></div>
         <div className="srow"><span>Guilt-free money</span><input className="field mini" inputMode="decimal" value={fun} onChange={e => setFun(e.target.value)} aria-label="Guilt-free money" /></div>
-        <div className="srow"><span>Save into <select className="field mini" value={potId} onChange={e => setPotId(e.target.value)} aria-label="Savings pot">{pots.map(p => <option key={p.id} value={p.id}>{potName(p)}</option>)}</select></span><input className="field mini" inputMode="decimal" value={save} onChange={e => setSave(e.target.value)} aria-label="Amount to save" /></div>
+        <div className="srow"><span>Save into <select className="field mini" value={potId} onChange={e => setPotId(e.target.value)} aria-label="Savings pot">{byOrder.map(p => <option key={p.id} value={p.id}>{potName(p)}</option>)}</select></span><input className="field mini" inputMode="decimal" value={save} onChange={e => setSave(e.target.value)} aria-label="Amount to save" /></div>
         <div className="srow total"><span>Left unassigned</span><b className={"num" + (rest < 0 ? " neg" : "")}>{fmt(rest, 2)}</b></div>
       </div>
-      {leftover < 0 && <p className="note-new">This pay doesn't cover bills plus living money. You're short {fmt(-leftover, 2)}. Cut living money or talk it through with Claude.</p>}
+      {leftover < 0 && <p className="note-new">{late.length ? "Tick anything above you've already paid first. " : ""}This pay doesn't cover bills plus living money{late.length ? " yet" : ""}. You're short {fmt(-leftover, 2)}. Cut living money or talk it through with Claude.</p>}
       <button className="solid" disabled={rest < -0.005} onClick={() => onConfirm({ potId, save: r2(s) })}>{s > 0 ? `Confirm · move ${fmt(s, 2)} to savings` : "Confirm"}</button>
       <p className="mute small">Bills and living money stay in your cash. Only the savings amount moves to the pot.</p>
     </Sheet>
@@ -1084,32 +1095,29 @@ function RewardSheet({ r, st, skip, onClose, act }) {
 
 /* ---------------- Guide: next steps + how-to (works without AI) ---------------- */
 const HOWTO = [
-  { q: "Add a debt (BNPL, PayLater, loan, phone contract)", k: "add debt new bnpl paylater grab atome loan owe borrow phone", a: ["Money → + Add a debt.", "Name it (must be different from existing debts, e.g. GrabFood), pick the type.", "Monthly payment, how many payments are left, next payment date.", "One-off? Set payments left to 1.", "Pick 'One I already had' or 'New borrowing' honestly, then Add debt."], go: "debt", btn: "Add a debt" },
-  { q: "Mark a bill as paid", k: "pay paid tick bill installment done", a: ["In This week, tap the bill. It fills black and your cash goes down.", "Wrong tap? Press Undo within 7 seconds.", "Paying one that isn't due yet? Money → tap the debt → tap the circle next to that payment."], go: "scroll:week", btn: "Go to This week" },
-  { q: "Pay extra, or pay a debt off early", k: "extra early pay off lump sum finish sooner izzat", a: ["Money → tap the debt.", "Pay extra: type the amount. It's taken off the last payments, so the debt ends sooner.", "Pay off now: marks everything left as paid today."], go: "scroll:debts", btn: "Go to Money" },
-  { q: "Change a payment's amount or date", k: "edit change amount date wrong payment", a: ["Money → tap the debt.", "Tap the amount next to the payment, change amount or date, Save."], go: "scroll:debts", btn: "Go to Money" },
-  { q: "Log what I spent", k: "spend spent log food transport smokes cigarette money", a: ["Tap Log (top bar) or Money → Log spend.", "Type the amount, pick a category, Save.", "Made a mistake? Money → tap the entry → edit or delete."], go: "spend", btn: "Log spending" },
-  { q: "Update how much cash I have", k: "cash bank balance update safe", a: ["Open your bank app and check the balance.", "This week → Update cash (or Money → Cash in bank). Type it, Save.", "Do this once a week; the app keeps it in sync in between."], go: "cash", btn: "Update cash" },
-  { q: "What does 'Safe to spend' mean?", k: "safe to spend meaning per day short", a: ["Your cash minus every bill due before your next payday.", "It's what you can spend without missing a bill. The per-day figure spreads it until payday.", "If it's red, you're short: line up backup cover before the bill date."], go: "scroll:week", btn: "See it" },
-  { q: "Payday: what to do when my allowance arrives", k: "payday allowance salary arrive split budget", a: ["Tick 'Allowance arrives' in This week when the money lands.", "The payday screen opens: bills, living money, guilt-free money, savings.", "Confirm, and your savings amount moves into the pot you chose."], go: "scroll:week", btn: "Go to This week" },
-  { q: "Change my allowance, or add ang bao / part-time money", k: "income allowance change 1015 rank ang bao part time extra money", a: ["Money → Income.", "Allowance: new amount, pay day, and from which month. Save.", "One-off money: name + amount. It's added to your cash."], go: "income", btn: "Open Income" },
-  { q: "Save money into a pot, or take some out", k: "pot savings buffer emergency save take out withdraw", a: ["Money → tap the pot circle.", "Add money moves it from cash into the pot.", "Take out needs a reason (e.g. Doctor). It moves back to cash and is kept in the pot's history."], go: "scroll:debts", btn: "Go to Money" },
-  { q: "Create a new savings pot", k: "new pot hajj wedding bto goal create", a: ["Money → New pot (the dashed circle).", "Name, goal, note. Create."], go: "new-pot", btn: "New pot" },
-  { q: "Add, edit or delete a task", k: "task todo add edit delete reminder", a: ["This week → type in 'Add a task…', optional date, Add.", "Tap ⋯ on a task to edit or delete it.", "Tick it to mark done. Done tasks are under 'Show done'."], go: "scroll:week", btn: "Go to This week" },
-  { q: "Milestones: add one or tick one", k: "milestone goal achievement add tick", a: ["Streaks → Milestones. Tap one, then confirm to mark done.", "Some tick themselves (e.g. 'CIMB cleared').", "+ Add a milestone for anything in the future, even 2040."], go: "ms", btn: "Add a milestone" },
-  { q: "I feel like trading", k: "trade trading urge gold xauusd deposit broker", a: ["Tap 'I feel like trading' in Streaks.", "Wait out the 10-minute timer. Breathe with the circle.", "Text your friend. NAMS: 6389 2200 (walk-ins welcome)."], go: "urge", btn: "Open it now" },
-  { q: "I slipped and traded", k: "slipped relapse traded lost reset streak", a: ["It happens. It isn't the end.", "Streaks → 'I slipped. Reset my streak.'", "Log any new debt honestly, then tell your friend. Tomorrow is day 1."], go: "scroll:streaks", btn: "Go to Streaks" },
-  { q: "Log a study session", k: "study network+ comptia hours learn", a: ["Streaks → Log a session → pick how long.", "Target and start date are in Settings."], go: "study", btn: "Log study" },
-  { q: "Change budget, categories, ORD date, animations", k: "settings budget categories ord date animation calm motion eyes", a: ["Menu (☰) → Settings.", "Budget, guilt-free money, categories, ORD, streak start, study.", "Animations: Full, Calm or Off."], go: "settings", btn: "Open Settings" },
-  { q: "Back up my data", k: "backup export download csv safe", a: ["Menu → Backup (or Settings → Download full backup).", "Do it once a month and keep the file in Google Drive."], go: "backup", btn: "Download backup" },
-  { q: "The four worlds", k: "worlds tabs money invest career life portal dock switch", a: ["The bar at the bottom switches worlds: Money (bills, debts, pots), Invest (the Grove), Career (study, path, to-dos) and Life (streak, family, milestones).", "Invest levels up by months planted in a row, never by prices."], go: "scroll:grove", btn: "Visit the Grove" },
-  { q: "Log spending from the home screen", k: "shortcut home screen quick log spend fast pause urge", a: ["Android: press and hold the Ascent icon, then tap Log spend (or Pause). Drag it out to make its own icon.", "iPhone: open the app in Safari with ?do=spend at the end of the address, then Share → Add to Home Screen. That icon opens straight to Log spending."], go: "spend", btn: "Log spend now" },
-  { q: "Change the name or reasons shown", k: "name arabic reasons why private settings about you", a: ["Settings → About you.", "These live only in your locked database, not in the public code."], go: "settings", btn: "Open Settings" },
-  { q: "Rewards", k: "reward redeem treat japan trip iphone grand seiko watch bmw m4 car ladder unlock", a: ["Life → Rewards.", "NS treats unlock with milestones (BMT, debt-free, Network+, Security+, ORD) and come from guilt-free money.", "After ORD, the ladder is paid from the Rewards pot (5% of take-home, 10% after your degree).", "When a reward is ready, Telegram tells you. Tap Redeem, type what it cost: it comes out of that pot only, never your savings."] },
-  { q: "Telegram reminders", k: "telegram reminder bot notification 8pm", a: ["Set up once with TELEGRAM-GUIDE.md.", "You get one message at 8pm when something is coming up: bills due tomorrow, payday, to-dos (30 days, 7 days and 1 day before, and when overdue) and milestones (30 and 7 days before).", "Any to-do you give a date is reminded automatically.", "Test: Settings → Send a test message."], go: "settings", btn: "Open Settings" },
-  { q: "Undo a mistake", k: "undo mistake wrong tap", a: ["After ticking anything, press Undo on the black bar (7 seconds).", "Later: tap it again to untick, or edit it (Money → tap the debt/entry)."], go: null },
-  { q: "No signal in camp", k: "offline signal camp no internet sync", a: ["The app still opens and shows your last data.", "Anything you tick or log is saved on your phone and syncs when you're back online."], go: null },
-  { q: "Forgot my password", k: "password forgot reset login sign in", a: ["On the sign-in screen tap 'Forgot password?'.", "Open the email link on your phone and set a new password."], go: null },
+  { q: "Get around the app", k: "worlds tabs money invest career life menu navigate switch carousel", a: ["Main menu: swipe (or ◀ ▶) between Money, Invest, Career and Life, then tap to enter.", "Inside, the tabs along the top (or L1 / R1) switch pages. B goes back.", "☰ opens the pause menu: Settings, Backup, Sign out."], go: null },
+  { q: "Mark a bill as paid", k: "pay paid tick bill installment done", a: ["Money → Week: tick the bill. Your cash goes down by that amount.", "Wrong tap? Press Undo within 7 seconds.", "Paying one early? Money → Debts → tap the debt → tick that payment."], go: "scroll:week", btn: "Go to Week" },
+  { q: "Payday: when the allowance lands", k: "payday allowance salary arrive split budget", a: ["Money → Week: tick 'Allowance arrives'.", "The Payday screen opens. If it lists bills you already paid, tap Paid ✓ on each.", "Check living money, guilt-free money and the pot, then Confirm. Only the savings amount moves."], go: "scroll:week", btn: "Go to Week" },
+  { q: "Log what I spent", k: "spend spent log food transport smokes guilt free money", a: ["Tap + Spend (top bar), type the amount, pick a category.", "Treats go under Guilt-free: they don't eat your $200 living budget.", "Wrong entry? Money → Spend → tap it to edit or delete."], go: "spend", btn: "Log spending" },
+  { q: "Update how much cash I have", k: "cash bank balance update safe", a: ["Check your bank app.", "Money → Week → Update cash, type the balance, Save.", "Once a week is enough; ticks and spending keep it in sync in between."], go: "cash", btn: "Update cash" },
+  { q: "What does 'Safe to spend' mean?", k: "safe to spend meaning per day short", a: ["Your cash minus every bill due before your next payday.", "What you can spend without missing a bill; the per-day figure spreads it until payday.", "Red means you're short: line up cover before the bill date. Never PayLater."], go: "scroll:week", btn: "Go to Week" },
+  { q: "Add a debt, or change a payment", k: "add debt new bnpl paylater loan edit change amount date wrong payment", a: ["Money → Debts → + Add a debt (name, type, monthly amount, payments left, next date).", "To change one payment: tap the debt, tap the amount, change it, Save.", "Many dates at once: Money → Debts → Due dates."], go: "scroll:debts", btn: "Go to Debts" },
+  { q: "Pay extra, or pay a debt off early", k: "extra early pay off lump sum finish sooner", a: ["Money → Debts → tap the debt.", "Pay extra comes off the last payments, so it ends sooner.", "Pay off now marks everything left as paid today."], go: "scroll:debts", btn: "Go to Debts" },
+  { q: "Change my allowance, or add extra money", k: "income allowance change rank ang bao part time extra money", a: ["Money → Debts → Income.", "Allowance: new amount, pay day and the month it starts.", "One-off money (ang bao, part-time): name + amount, added to your cash."], go: "income", btn: "Open Income" },
+  { q: "Savings pots", k: "pot savings buffer emergency save take out withdraw new create", a: ["Money → Pots. Pots are labels: keep the real money in one savings account, separate from your card.", "Tap a pot to add money, or take some out with a reason.", "+ New pot for a new goal."], go: "scroll:pots", btn: "Go to Pots" },
+  { q: "Monthly bills and Mum & Dad", k: "bills recurring subscription parents mum dad give", a: ["Money → Bills: add regular non-debt bills (insurance, subscriptions).", "Money → Parents: $50 a month from Sep 2027. Give extra any time.", "Both count in Safe to spend and the Payday screen."], go: "scroll:bills", btn: "Go to Bills" },
+  { q: "To-dos and reminders", k: "task todo add edit delete reminder lock locked", a: ["Money → Week: type a to-do, add a date, Add.", "Dated to-dos unlock 7 days before they're due, and reach Telegram 30, 7 and 1 day before.", "Tap ⋯ to edit or delete. Done ones sit under 'Show done'."], go: "scroll:week", btn: "Go to Week" },
+  { q: "Telegram reminders", k: "telegram reminder bot notification 8pm izzat", a: ["One message at 8pm, only when something is coming up.", "Bills the night before (with the full bill for shared lines), a nudge to tell Izzat the day before Starhub and M1, payday savings, to-dos and milestones.", "Settings → Send a test message to check it."], go: "settings", btn: "Open Settings" },
+  { q: "Milestones", k: "milestone goal achievement journey add tick", a: ["Life → Journey. Tap one and confirm to mark it done.", "Many tick themselves (loans cleared, pots full).", "+ Add a milestone for anything ahead."], go: "scroll:milestones", btn: "Go to Journey" },
+  { q: "Rewards", k: "reward redeem treat japan trip iphone grand seiko watch bmw m4 car ladder unlock", a: ["Life → Rewards.", "NS treats unlock with milestones and come from guilt-free money.", "After ORD the ladder is paid from the Rewards pot. When one is ready, Telegram tells you. Redeem takes money from that pot only."], go: "scroll:rewards", btn: "Open Rewards" },
+  { q: "Log a study session", k: "study network+ security+ comptia hours learn", a: ["Career → Study → Log a session → pick how long.", "Target and start date are in Settings."], go: "study", btn: "Log study" },
+  { q: "I feel like trading", k: "trade trading urge gold xauusd deposit broker", a: ["Tap Urge? on the main menu, or Life → Streak → I feel like trading.", "Wait out the 10-minute timer. Breathe with the circle.", "Text your friend. NAMS: 6389 2200."], go: "urge", btn: "Open it now" },
+  { q: "I slipped and traded", k: "slipped relapse traded lost reset streak", a: ["It happens. It isn't the end.", "Life → Streak → 'I slipped. Reset my streak.'", "Log any new debt honestly, then tell your friend. Tomorrow is day 1."], go: "scroll:streak", btn: "Go to Streak" },
+  { q: "Settings: budget, categories, ORD, name", k: "settings budget categories ord date animation name arabic reasons", a: ["☰ → Settings.", "Budget, guilt-free money, categories, ORD, study, your name and reasons, animations.", "Your name and reasons live in your private database, not in the public code."], go: "settings", btn: "Open Settings" },
+  { q: "Back up my data", k: "backup export download csv safe", a: ["☰ → Backup.", "Once a month; keep the file in Google Drive. Telegram reminds you every 3 months."], go: "backup", btn: "Download backup" },
+  { q: "Undo a mistake", k: "undo mistake wrong tap", a: ["Press Undo on the bar right after ticking (7 seconds).", "Later: tap it again to untick, or open it and edit."], go: null },
+  { q: "No signal in camp", k: "offline signal camp no internet sync", a: ["The app still opens with your last data.", "Anything you tick or log is saved on the phone and syncs when you're back online."], go: null },
+  { q: "Forgot my password or PIN", k: "password forgot reset login sign in pin lock", a: ["Password: on the sign-in screen tap 'Forgot password?' and open the email link on your phone.", "PIN: tap 'Forgot PIN?', sign in again, then set a new PIN in Settings."], go: null },
 ];
 
 function nextSteps(d, calc, settings, status) {
@@ -1543,10 +1551,10 @@ function ugCards(d, calc, settings, today) {
   const path = d.ms.filter(m => areaOf(m) === "career").sort((a, b) => (a.sort || 0) - (b.sort || 0));
   const nextP = path.find(m => !m.done), doneP = path.filter(m => m.done).length;
   const studyH = (calc.studyWeek / 60).toFixed(calc.studyWeek % 60 ? 1 : 0);
-  const climbed = Math.max(0, Math.round((1 - calc.remaining / calc.totalAll) * 100));
+  const climbed = Math.max(0, Math.round((1 - calc.loansLeft / calc.loansTotal) * 100)), loansDone = calc.loansLeft < .005;
   return [
-    { k: "money", jp: "お金", t: "Money", tag: "Clear debt · buy freedom", img: "1758881606455-26cc1c2c8de4", l: "Debt cleared", v: `${fmt(calc.remaining)} left`, pill: `${climbed}%`, p: climbed, c: "gr",
-      say: [{ t: "Money. " }, { t: fmt(calc.remaining), b: 1 }, { t: " left" + (calc.safe != null ? ", " : ".") }, ...(calc.safe != null ? [{ t: fmt(calc.safe), b: 1 }, { t: " safe to spend." }] : [])] },
+    { k: "money", jp: "お金", t: "Money", tag: "Clear debt · buy freedom", img: "1758881606455-26cc1c2c8de4", l: loansDone ? "Loans cleared ✓" : "Loans cleared", v: loansDone ? `${fmt(calc.phoneLeft)} phone bills left` : `${fmt(calc.loansLeft)} loans left`, pill: `${climbed}%`, p: climbed, c: "gr",
+      say: [{ t: "Money. " }, { t: fmt(loansDone ? calc.phoneLeft : calc.loansLeft), b: 1 }, { t: (loansDone ? " in phone bills left" : " in loans left") + (calc.safe != null ? ", " : ".") }, ...(calc.safe != null ? [{ t: fmt(calc.safe), b: 1 }, { t: " safe to spend." }] : [])] },
     { k: "invest", jp: "投資", t: "Invest", tag: "Show up · level up", img: "1578215560516-474d84f62ec3", l: `Level ${inv.li + 1} · ${inv.level.name}`, v: open ? `${inv.n} mo in` : monthLabel(ym(start)), pill: `LV ${inv.li + 1}`, p: open ? inv.pct : 0, c: "cy",
       lock: open ? null : `Unlocks ${monthLabel(ym(start))}`,
       say: open ? [{ t: "Invest. " }, { t: inv.thisMonth ? "This month is in." : "This month isn't in yet.", b: 1 }] : [{ t: "Invest unlocks " }, { t: monthLong(ym(start)), b: 1 }, { t: ". Launch checklist first." }] },
@@ -1831,7 +1839,7 @@ function monthReport(d, settings, key, today) {
   const inKey = s => String(s || "").slice(0, 7) === key;
   const due = d.sched.filter(r => isOblig(r) && inKey(r.month_date) && rowDate(r) <= upto);
   const onTime = due.filter(r => r.is_cleared && (!r.paid_on || parseDate(r.paid_on) <= rowDate(r)));
-  const spend = d.spend.filter(s => inKey(s.spent_on) && s.category !== "Reward").reduce((a, s) => a + Number(s.amount), 0);
+  const spend = d.spend.filter(s => inKey(s.spent_on) && s.category !== "Reward" && s.category !== "Guilt-free").reduce((a, s) => a + Number(s.amount), 0);
   const budget = Number(settings.budget) || 0;
   const studyMin = d.study.filter(s => inKey(s.studied_on)).reduce((a, s) => a + s.minutes, 0);
   const sStart = parseDate(settings.studyStart || "2099-01-01");
@@ -2122,6 +2130,9 @@ function Main({ session, mode, setMode }) {
     const phones = Object.values(ents).filter(e => e.cat === "Telco").sort((a, b) => a.name.localeCompare(b.name));
     const phoneLeft = phones.reduce((s, e) => s + e.left, 0), phoneTotal = phones.reduce((s, e) => s + e.total, 0);
     const phoneLast = phones.reduce((m, e) => e.last > m ? e.last : m, "");
+    const loansLeft = debts.reduce((s, e) => s + e.left, 0), loansTotal = debts.reduce((s, e) => s + e.total, 0) || 1;
+    const dev = settings.phoneDevice || {}; // your share of each phone's instalment per month (the phone itself, not the plan)
+    const deviceLeft = phones.reduce((s, e) => s + (Number(dev[e.name]) || 0) * e.rows.filter(r => !r.is_cleared).length, 0);
     const personal = new Set(d.libs.filter(l => /personal/i.test(l.type || "")).map(l => l.name));
     const creditLeft = debts.filter(e => !personal.has(e.name)).reduce((s, e) => s + e.left, 0);
     const potsSum = d.pots.reduce((s, p) => s + (Number(p.balance) || 0), 0);
@@ -2148,7 +2159,7 @@ function Main({ session, mode, setMode }) {
     const later = tasksOpen.filter(t => t.due_date && parseDate(t.due_date) > end);
     const soon = sched.filter(r => !r.is_cleared && r._dt > end && r._dt <= addDays(end, 30)).sort((a, b) => a._dt - b._dt);
     const spentMonth = d.spend.filter(s => s.spent_on.slice(0, 7) === monthKey);
-    const spentTotal = spentMonth.filter(x => x.category !== "Reward").reduce((s, x) => s + Number(x.amount), 0); // rewards come from guilt-free money, not the budget
+    const spentTotal = spentMonth.filter(x => x.category !== "Reward" && x.category !== "Guilt-free").reduce((s, x) => s + Number(x.amount), 0); // rewards come from guilt-free money, not the budget
     const byCat = {}; spentMonth.forEach(s => byCat[s.category] = (byCat[s.category] || 0) + Number(s.amount));
     const mon = addDays(today, -((today.getDay() + 6) % 7));
     const studyWeek = d.study.filter(s => parseDate(s.studied_on) >= mon).reduce((s, x) => s + x.minutes, 0);
@@ -2180,7 +2191,7 @@ function Main({ session, mode, setMode }) {
     d.study.forEach(s => { h(s.studied_on.slice(0, 7)).study += s.minutes; });
     d.moves.forEach(m => { const x = h(ymd(new Date(m.created_at)).slice(0, 7)); if (Number(m.amount) > 0) x.saved += Number(m.amount); else x.out -= Number(m.amount); });
     const history = Object.values(H).filter(x => x.key <= monthKey).sort((a, b) => b.key.localeCompare(a.key));
-    return { monthKey, out, obl, inc, ents, debts, phones, phoneLeft, phoneTotal, phoneLast, totalAll, remaining, creditLeft, potsSum, stageIdx, nextPay, payDate, dueBefore, cash, safe, daysToPay, week, later, tasksDone, soon, spentTotal, byCat, studyWeek, streak, months, leftAfter, proj, events, history, netWorth: potsSum + (cash || 0) - remaining };
+    return { monthKey, out, obl, inc, ents, debts, phones, phoneLeft, phoneTotal, phoneLast, loansLeft, loansTotal, deviceLeft, totalAll, remaining, creditLeft, potsSum, stageIdx, nextPay, payDate, dueBefore, cash, safe, daysToPay, week, later, tasksDone, soon, spentTotal, byCat, studyWeek, streak, months, leftAfter, proj, events, history, netWorth: potsSum + (cash || 0) - loansLeft - deviceLeft };
   }, [d]);
 
   /* ----- keep the allowance going forward, month after month ----- */
@@ -2288,8 +2299,8 @@ function Main({ session, mode, setMode }) {
         } else {
           const after = calc.inc.filter(x => !x.is_cleared && x._dt > rowDate(r)).sort((a, b) => a._dt - b._dt)[0];
           const until = after ? after._dt : addDays(today, 30);
-          const bills = calc.obl.filter(x => !x.is_cleared && x._dt < until).reduce((s, x) => s + Number(x.amount_due), 0);
-          setTimeout(() => setSheet({ type: "payday", amount: amt, bills, nextDate: after ? after._dt : null }), 500);
+          const due = calc.out.filter(x => !x.is_cleared && x._dt < until);
+          setTimeout(() => setSheet({ type: "payday", amount: amt, rows: due, nextDate: after ? after._dt : null }), 500);
         }
       } else if (!silent) flash("Marked as not paid");
     },
@@ -2550,7 +2561,7 @@ function Main({ session, mode, setMode }) {
       {party && <Party {...party} onDone={() => setParty(null)} />}
       {repEl}
       {toast && <div className="toast">{toast}</div>}
-      {urge && <Urge left={calc.remaining} streak={calc.streak} beaten={Number(d.state.urges_beaten) || 0} onClose={() => setUrge(false)} onBeaten={beatUrge} onTalk={talkUrge} />}
+      {urge && <Urge left={calc.loansLeft} streak={calc.streak} beaten={Number(d.state.urges_beaten) || 0} onClose={() => setUrge(false)} onBeaten={beatUrge} onTalk={talkUrge} />}
     </React.Fragment>
   );
 
@@ -2594,7 +2605,7 @@ function Main({ session, mode, setMode }) {
           <div className="when"><span className="m">{label}</span><span className="event">{event}</span></div>
           <div className="big"><span className="cur-sign">$</span><Odometer value={debtShown} /></div>
           <div className="sub">
-            <span>left to clear</span>
+            <span>loans + phones left</span>
             {isNow ? (calc.safe != null ? <span>safe to spend <b>{fmt(calc.safe)}</b></span> : <span><b>{ordDays}</b> days to ORD</span>) : <span>projected savings <b>{fmt(calc.proj[key] || 0)}</b></span>}
             <span>climbed <b>{Math.round(progress * 100)}%</b></span>
           </div>
@@ -2627,7 +2638,7 @@ function Main({ session, mode, setMode }) {
           <div className="stats reveal">
             <div><div className="v"><Count to={calc.spentTotal} /></div><div className="l">Spent of {fmt(settings.budget)}</div></div>
             <div><div className="v">{calc.nextPay ? dayLabel(calc.nextPay._dt).slice(4) : "—"}</div><div className="l">Payday {calc.nextPay ? "+" + money(Number(calc.nextPay.amount_due)) : ""}</div></div>
-            <div><div className="v"><Count to={calc.week.filter(w => w.kind === "bill" && !w.done).reduce((s, w) => s + w.amt, 0)} /></div><div className="l">Bills this week</div></div>
+            <div><div className="v"><Count to={calc.week.filter(w => w.kind === "bill" && !w.done).reduce((s, w) => s + w.amt, 0)} /></div><div className="l">Bills due this week</div></div>
           </div>
           </div>
 
@@ -2668,7 +2679,7 @@ function Main({ session, mode, setMode }) {
 
         <section className="block wrap" id="debts">
           <div className="sechead"><Scramble text="DEBTS" /><span className="idx">net worth<br /><b className={calc.netWorth < 0 ? "neg" : ""}>{fmt(calc.netWorth)}</b></span></div>
-          <div className="nw reveal"><span>Savings {fmt(calc.potsSum)}</span><span>+ cash {calc.cash == null ? "—" : fmt(calc.cash)}</span><span>− debts {fmt(calc.remaining)}</span></div>
+          <div className="nw reveal"><span>Savings {fmt(calc.potsSum)}</span><span>+ cash {calc.cash == null ? "—" : fmt(calc.cash)}</span><span>− loans {fmt(calc.loansLeft)}</span>{calc.deviceLeft > .005 && <span>− phones still owed {fmt(calc.deviceLeft)}</span>}</div>
           <div className="stack reveal" aria-label="What's left, by debt">
             {[...calc.debts.filter(g => g.left > .005).map(g => [g.name, g.left]), ...(calc.phoneLeft > .005 ? [["Phone contracts", calc.phoneLeft]] : [])].map(([n, l]) => <div key={n} title={`${n} ${fmt(l, 2)}`} style={{ flexGrow: l }} />)}
           </div>
@@ -2681,7 +2692,7 @@ function Main({ session, mode, setMode }) {
             ))}
             {calc.phones.length > 0 && <div className="debt" style={calc.phoneLeft < .005 ? { opacity: .5 } : null}>
               <span className="n">Phone contracts</span><span className="v">{fmt(calc.phoneLeft, 2)}</span>
-              <span className="e">{calc.phoneLeft < .005 ? "All paid" : `Last payment ${monthLabel(calc.phoneLast.slice(0, 7))} · ${calc.phones.length} lines`}</span>
+              <span className="e">{calc.phoneLeft < .005 ? "All paid" : `Monthly bills, not loans · last ${monthLabel(calc.phoneLast.slice(0, 7))} · ${calc.phones.length} lines${calc.deviceLeft > .005 ? ` · phones still owed ${fmt(calc.deviceLeft)}` : ""}`}</span>
               <div className="lines">{calc.phones.map(p => { const nx = p.rows.find(r => !r.is_cleared); return <button key={p.name} className="line-btn" onClick={() => setSheet({ type: "debt-detail", entity: p.name })}><span>{p.name}{nx ? <em className="mute"> · next {dayLabel(nx._dt)}</em> : null}</span><span className="num">{fmt(p.left, 2)}</span></button>; })}</div>
             </div>}
             <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "debt" })}>+ Add a debt</button><button className="chip-btn" onClick={() => setSheet({ type: "due-days" })}>Due dates</button><button className="chip-btn" onClick={() => setSheet({ type: "income" })}>Income</button><button className="chip-btn" onClick={() => setSheet({ type: "cash" })}>Cash in bank</button></div>
@@ -2705,7 +2716,7 @@ function Main({ session, mode, setMode }) {
         <section className="block wrap" id="pots">
           <div className="sechead"><Scramble text="POTS" /><span className="idx">saved<br /><b>{fmt(calc.potsSum)}</b></span></div>
           <div className="pots reveal">
-            {d.pots.map(p => (
+            {[...d.pots].sort((a, b) => (a.sort || 0) - (b.sort || 0)).map(p => (
               <button className="pot" key={p.id} onClick={() => setSheet({ type: "pot", pot: p })} aria-label={`Open ${potName(p)}`}>
                 <Ring pct={p.goal ? Number(p.balance) / Number(p.goal) * 100 : 0} />
                 <b>{potName(p)}</b>
@@ -2777,7 +2788,7 @@ function Main({ session, mode, setMode }) {
       {sheet?.type === "task" && <TaskSheet task={sheet.task} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "ms" && <MilestoneSheet onClose={() => setSheet(null)} onSave={act.addMs} />}
       {sheet?.type === "settings" && <SettingsSheet settings={settings} state={d.state} onClose={() => setSheet(null)} act={act} onExport={doExport} telegramTest={telegramTest} />}
-      {sheet?.type === "payday" && <PaydaySheet amount={sheet.amount} bills={sheet.bills} nextDate={sheet.nextDate} settings={settings} pots={d.pots} onClose={() => setSheet(null)} onConfirm={({ potId, save }) => { setSheet(null); const p = d.pots.find(x => x.id === potId); if (p && save > 0) act.potMove(p, save, "Payday"); else flash("Payday done."); }} />}
+      {sheet?.type === "payday" && <PaydaySheet amount={sheet.amount} rows={sheet.rows || []} act={act} nextDate={sheet.nextDate} settings={settings} pots={d.pots} onClose={() => setSheet(null)} onConfirm={({ potId, save }) => { setSheet(null); const p = d.pots.find(x => x.id === potId); if (p && save > 0) act.potMove(p, save, "Payday"); else flash("Payday done."); }} />}
       {sheet?.type === "ai" && <Sheet title="Claude isn't switched on yet" onClose={() => setSheet(null)}>
         <p className="mute">The in-app assistant needs about $5 of Anthropic credits. The plan is December, once your $300 buffer is done. Then follow ASSISTANT-SETUP.md.</p>
         <p className="mute">Until then, open the Claude app on your phone and use your "Life Changing" project. It knows your plan.</p>

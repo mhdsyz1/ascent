@@ -1084,3 +1084,7 @@ html[data-world=ug] .rw.done{border-color:rgba(140,255,63,.45)}
 .rw-skip{margin-top:8px;align-self:flex-start}
 .rw-sure{display:flex;gap:10px;align-items:flex-start;margin:12px 0 4px;font-size:13.5px;line-height:1.45;color:var(--ink);cursor:pointer}
 .rw-sure input{margin-top:3px;width:18px;height:18px;accent-color:var(--gr);flex:none}
+/* payday: bills not ticked yet */
+.pay-late{border:1px solid rgba(255,95,162,.45);background:rgba(255,95,162,.06);padding:10px 12px;margin-bottom:12px}
+.pay-late .srow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair)}
+.pay-late .srow:last-of-type{border-bottom:0}

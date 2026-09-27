@@ -1,11 +1,12 @@
 # Ascent
 
-Muhammad Syazwan's roadmap app: debts, savings, streaks and milestones.
-Live at https://mhdsyz1.github.io/ascent/ once GitHub Pages is on.
+A personal roadmap app: money, investing, career and life goals in one place.
+Live at https://mhdsyz1.github.io/ascent/
 
-- `index.html`, `style.css`, `app.js`: the site (app.js is built from `src/app.jsx`)
-- `supabase-setup.sql`: one-time database setup, run in the Supabase SQL Editor
-- `.github/workflows/keep-awake.yml`: pings Supabase every 3 days so the free project never pauses
+- `index.html`, `style.css`, `app.js`, `sw.js`: the site (`app.js` is built from `src/app.jsx`)
+- `manifest.webmanifest`, `icon-*.png`, `ascent-*.jpg`: install icon and images
+- `.github/workflows/keep-awake.yml`: pings the database every few days so it never pauses
 
-The Supabase key in the code is the publishable key. It is meant to be public;
-your data is protected by login plus row level security.
+The database key in the code is the publishable key, which is meant to be public.
+All data is protected by sign-in and row level security.
+Database scripts are kept offline on purpose.
