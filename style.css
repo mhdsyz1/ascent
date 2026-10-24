@@ -1088,3 +1088,45 @@ html[data-world=ug] .rw.done{border-color:rgba(140,255,63,.45)}
 .pay-late{border:1px solid rgba(255,95,162,.45);background:rgba(255,95,162,.06);padding:10px 12px;margin-bottom:12px}
 .pay-late .srow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--hair)}
 .pay-late .srow:last-of-type{border-bottom:0}
+/* ---- soundtrack: now playing + volume ---- */
+.ug-np{position:fixed;top:calc(env(safe-area-inset-top,0px) + 62px);right:14px;z-index:2147483000;display:flex;flex-direction:column;gap:1px;padding:9px 16px 9px 14px;background:linear-gradient(180deg,rgba(8,22,52,.95),rgba(4,10,26,.95));border:1px solid var(--line,rgba(63,230,255,.28));border-left:3px solid #8CFF3F;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);color:#EAF4FF;font:600 12px 'Chakra Petch',sans-serif;animation:npIn .45s cubic-bezier(.2,.9,.2,1) both;pointer-events:none}
+.ug-np .ug-np-k{font:800 10px 'Chakra Petch',sans-serif;letter-spacing:.2em;text-transform:uppercase;color:#3FE6FF}
+.ug-np b{font:italic 900 17px 'Exo 2',sans-serif;text-transform:uppercase;letter-spacing:.02em}
+.ug-np small{color:#8195B1;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase}
+.ug-np.out{animation:npOut .6s ease both}
+@keyframes npIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
+@keyframes npOut{to{opacity:0;transform:translateX(40px)}}
+.ug-vol{display:flex;align-items:center;gap:12px;margin-top:14px;font:700 11px 'Chakra Petch',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#8195B1}
+.ug-vol input{flex:1;max-width:260px;accent-color:#8CFF3F}
+@media (prefers-reduced-motion:reduce){.ug-np,.ug-np.out{animation:none}}
+.proof-layer .scrim{z-index:75}
+.proof-bill{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:10px 12px;margin-bottom:10px;border:1px solid rgba(129,149,177,.35);font-weight:700}
+.proof-bill em{font-weight:500;font-style:normal}
+.proof-pick{display:flex;align-items:center;justify-content:center;cursor:pointer;text-align:center}
+.proof-skip{display:block;margin:12px auto 0}
+.proof-img{margin:10px 0;max-height:34vh;overflow:auto;border:1px solid rgba(129,149,177,.35);background:#000}
+.proof-img.tall{max-height:62vh}
+.proof-img img{display:block;width:100%;height:auto}
+.proof-busy{margin:10px 0;color:#8195B1;font:700 12px 'Chakra Petch',sans-serif;letter-spacing:.12em;text-transform:uppercase;animation:pulse 1.4s ease-in-out infinite}
+.proof-verdict{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;padding:10px 12px;margin:10px 0;border:1px solid rgba(129,149,177,.35);font-size:13.5px;line-height:1.45}
+.proof-verdict.p-ok{border-color:rgba(140,255,63,.55);background:rgba(140,255,63,.06)}
+.proof-verdict.p-mismatch{border-color:rgba(255,95,162,.55);background:rgba(255,95,162,.07)}
+.proof-verdict.p-unchecked,.proof-verdict.p-none{border-color:rgba(255,200,60,.5);background:rgba(255,200,60,.06)}
+.proof-tag{display:inline-block;padding:2px 7px;font:700 10.5px 'Chakra Petch',sans-serif;letter-spacing:.12em;text-transform:uppercase;border:1px solid currentColor;white-space:nowrap}
+.proof-tag.p-ok{color:#8CFF3F}.proof-tag.p-mismatch{color:#FF5FA2}.proof-tag.p-unchecked,.proof-tag.p-none{color:#FFC83C}
+.proof-link{margin-left:6px;font-size:inherit}
+.proof-meta{display:flex;gap:8px;align-items:center}
+@keyframes pulse{50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.proof-busy{animation:none}}
+/* ---- v21: fewer tabs, several sections per tab ---- */
+.ug-pages[data-tab=debts] #top,.ug-pages[data-tab=debts] #ascent,.ug-pages[data-tab=debts] #bills,
+.ug-pages[data-tab=pots] #parents,.ug-pages[data-tab=history] #spend,
+.ug-pages[data-tab=grove] #checklist,.ug-pages[data-tab=learn] #own,.ug-pages[data-tab=rules] #review,.ug-pages[data-tab=rules] #badges,
+.ug-pages[data-tab=path] #todo,.ug-pages[data-tab=streak] #why,.ug-pages[data-tab=streak] #habits,.ug-pages[data-tab=family] #rewards{display:block}
+.wk-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font:800 11px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--cy);margin:22px 0 8px}
+.wk-h small{font:600 11px var(--sans);letter-spacing:.06em;text-transform:none;color:var(--mute)}
+.area-tag{display:inline-block;margin-left:6px;padding:1px 6px;border:1px solid rgba(63,230,255,.35);font:700 9.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--cy);vertical-align:2px}
+.area-tag.a-career{border-color:rgba(255,200,60,.45);color:#FFC83C}
+.area-tag.a-invest{border-color:rgba(140,255,63,.45);color:#8CFF3F}
+.area-tag.a-life{border-color:rgba(255,95,162,.45);color:#FF5FA2}
+.addrow.fold{margin-top:10px}
