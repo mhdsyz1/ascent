@@ -1,4 +1,4 @@
-/* Ascent v2 · personal life roadmap app (build v23: Gym tab)
+/* Ascent v2 · personal life roadmap app (build v24: Gym programme)
    Data lives in Supabase; only the owner's account can read or write it. */
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from "react";
 import { createRoot } from "react-dom/client";
@@ -1585,50 +1585,104 @@ function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewT
 
 /* ================= LIFE: Dawn ================= */
 const FAMILY_RX = /mum|dad|parent|hajj|travel|wedding|bto|renov|family/i;
-/* ================= Life → Gym (v23): weights + cardio, logged in settings.gym ================= */
-const GYM_EX = {
-  A: { name: "Weights A", items: [
-    { id: "bench", n: "Bench press", s: 3, r: "8–10" },
-    { id: "goblet", n: "Goblet squat", s: 3, r: "10–12" },
-    { id: "dbrow", n: "One-arm dumbbell row", s: 3, r: "10 each arm" },
-    { id: "ohp", n: "Dumbbell shoulder press", s: 3, r: "10" },
-    { id: "lat", n: "Lateral raise", s: 3, r: "12–15" },
-    { id: "pushup", n: "Push-ups", s: 2, r: "max", bw: true },
-  ] },
-  B: { name: "Weights B", items: [
-    { id: "rdl", n: "Barbell Romanian deadlift", s: 3, r: "8–10" },
-    { id: "dbbench", n: "Dumbbell bench press", s: 3, r: "10" },
-    { id: "bbrow", n: "Bent-over barbell row", s: 3, r: "8–10" },
-    { id: "split", n: "Dumbbell split squat", s: 3, r: "8 each leg" },
-    { id: "lat", n: "Lateral raise", s: 3, r: "12–15" },
-    { id: "situp", n: "Sit-ups", s: 2, r: "max", bw: true },
-  ] },
+/* ================= Life → Gym (v24): programme, logger, rest timer, progression, body & food ================= */
+/* exercise library. eq: bb = barbell, db = dumbbells, bw = bodyweight reps, time = seconds */
+const GX = {
+  goblet: { n: "Goblet squat", eq: "db", mus: "Legs, glutes, core", tips: ["Hold one dumbbell at your chest, elbows pointing down", "Sit down between your heels, chest up", "Push the floor away; knees follow your toes"] },
+  rdl: { n: "Barbell Romanian deadlift", eq: "bb", mus: "Hamstrings, glutes, lower back", tips: ["No rack: deadlift the bar up first, then start standing", "Push hips back with soft knees; bar slides down your thighs", "Stop at the hamstring stretch. Back stays flat"] },
+  split: { n: "Dumbbell split squat", eq: "db", mus: "Legs, glutes", tips: ["Long stance, back heel up", "Drop the back knee straight down", "Front heel stays down; push through it"] },
+  bridge: { n: "Weighted glute bridge", eq: "bb", mus: "Glutes, hamstrings", tips: ["Roll the bar over your hips (towel for padding)", "Drive through your heels, squeeze at the top", "Ribs down; don't arch your lower back"] },
+  calf: { n: "Calf raise", eq: "db", mus: "Calves", tips: ["Dumbbells in hands, balls of feet on a step", "Full stretch at the bottom, pause at the top", "Slow and controlled"] },
+  situp: { n: "Sit-ups (IPPT)", eq: "bw", mus: "Abs, hip flexors", tips: ["Use the IPPT form you were taught", "Breathe out on the way up", "A steady rhythm beats sprinting then dying"] },
+  plank: { n: "Plank", eq: "time", mus: "Core", tips: ["Elbows under shoulders", "Squeeze glutes; body in one straight line", "Stop when your hips sag"] },
+  dbbench: { n: "Dumbbell bench press", eq: "db", mus: "Chest, shoulders, triceps", tips: ["Kick the dumbbells up off your knees as you lie back", "Shoulder blades squeezed, feet planted", "Lower slowly to chest level, press up and slightly in"] },
+  incline: { n: "Incline dumbbell press", eq: "db", mus: "Upper chest, shoulders", tips: ["Bench at 30–45°", "Elbows about 45° from your body", "Lower slowly to the top of your chest"] },
+  bbrow: { n: "Bent-over barbell row", eq: "bb", mus: "Back, biceps", tips: ["Hinge to about 45°, flat back, soft knees", "Pull the bar to your belly button", "Squeeze your shoulder blades; no jerking"] },
+  dbrow: { n: "One-arm dumbbell row", eq: "db", mus: "Lats, upper back", tips: ["Knee and hand on the bench, flat back", "Pull the dumbbell to your hip, not your chest", "Lower all the way for a stretch"] },
+  sdbpress: { n: "Seated dumbbell shoulder press", eq: "db", mus: "Shoulders, triceps", tips: ["Bench upright, back against it", "Start at ear level, press straight up", "Ribs down; don't lean back"] },
+  lat: { n: "Lateral raise", eq: "db", mus: "Side shoulders (width)", tips: ["Light weight, slight bend in the elbows", "Raise out to the sides, to shoulder height", "Lead with your elbows; no swinging"] },
+  rearfly: { n: "Rear-delt fly", eq: "db", mus: "Rear shoulders, upper back", tips: ["Chest on the incline bench", "Arms out wide, thumbs slightly down", "Squeeze your shoulder blades, lower slowly"] },
+  pullover: { n: "Dumbbell pullover", eq: "db", mus: "Lats, chest", tips: ["Upper back across the bench, hips low", "One dumbbell over your chest, lower behind your head, elbows slightly bent", "Feel the stretch, pull back over your chest"] },
+  pushup: { n: "Push-ups (IPPT)", eq: "bw", mus: "Chest, triceps, core", tips: ["Body straight, hands under shoulders", "Same depth as IPPT", "Breathe out as you push"] },
+  curl: { n: "Dumbbell curl", eq: "db", mus: "Biceps", tips: ["Elbows pinned to your sides", "Turn palms up as you lift", "Lower slowly; no swinging"] },
+  ohtri: { n: "Overhead triceps extension", eq: "db", mus: "Triceps", tips: ["One dumbbell, both hands, overhead", "Elbows point forward; lower behind your head", "Straighten fully at the top"] },
+  deadlift: { n: "Barbell deadlift", eq: "bb", mus: "Legs, glutes, whole back", tips: ["Bar over mid-foot, shins close", "Flat back, chest up, push the floor away", "Stand tall at the top; lower with control"] },
+  bulg: { n: "Bulgarian split squat", eq: "db", mus: "Legs, glutes", tips: ["Back foot up on the bench", "Drop straight down, front knee over toes", "It's hard: start light"] },
 };
+const GX_OLD = { bench: "Bench press", ohp: "Dumbbell shoulder press" }; // v23 history
+const gxName = id => (GX[id] && GX[id].n) || GX_OLD[id] || id;
+const gxEq = id => (GX[id] && GX[id].eq) || "db";
+const gi = (id, s, r, rest) => ({ id, s, r, rest });
+/* the programme. Phase 1 (book-out weekends, until POP) and Phase 2 (full week, after POP) */
+const GYM_W = {
+  L: { name: "Lower body + core", items: [gi("goblet", 3, "10–12", 90), gi("rdl", 3, "8–10", 120), gi("split", 3, "8–10 each leg", 90), gi("bridge", 3, "12", 60), gi("calf", 3, "15", 45), gi("situp", 2, "max", 60), gi("plank", 2, "30–45 s", 45)] },
+  U: { name: "Upper body", items: [gi("dbbench", 4, "8–10", 120), gi("bbrow", 4, "8–10", 120), gi("sdbpress", 3, "8–10", 90), gi("dbrow", 3, "10–12 each arm", 60), gi("lat", 3, "12–15", 60), gi("pushup", 2, "max", 90), gi("curl", 2, "12", 60), gi("ohtri", 2, "12", 60)] },
+  U1: { name: "Upper strength", items: [gi("dbbench", 4, "6–8", 150), gi("bbrow", 4, "6–8", 150), gi("sdbpress", 3, "6–8", 120), gi("dbrow", 3, "8–10 each arm", 90), gi("curl", 3, "10", 60), gi("ohtri", 3, "10", 60), gi("pushup", 1, "max", 90)] },
+  L1: { name: "Lower strength", items: [gi("deadlift", 3, "5", 180), gi("goblet", 4, "8", 120), gi("split", 3, "8 each leg", 90), gi("calf", 4, "12", 45), gi("plank", 3, "45 s", 45)] },
+  U2: { name: "Upper volume", items: [gi("incline", 4, "10–12", 90), gi("dbrow", 4, "12 each arm", 60), gi("lat", 4, "15", 45), gi("rearfly", 3, "15", 45), gi("pullover", 3, "12", 60), gi("curl", 3, "12", 60), gi("ohtri", 3, "12", 60), gi("pushup", 1, "max", 90)] },
+  L2: { name: "Lower volume", items: [gi("bulg", 3, "10 each leg", 90), gi("rdl", 4, "10", 90), gi("bridge", 4, "12", 60), gi("goblet", 3, "15", 60), gi("calf", 3, "20", 45), gi("situp", 2, "max", 60)] },
+};
+const GYM_OLDW = { A: "Weights A", B: "Weights B" };
 const GYM_CARDIO = {
   I: { name: "Cardio: intervals", how: "5 min easy jog · 6 × (1 min fast + 90 s easy) · 5 min cool-down" },
-  E: { name: "Cardio: easy run", how: "3–4 km at a pace where you can still talk" },
-  S: { name: "15 min cardio", how: "Easy jog or skipping, after Weights B" },
+  E: { name: "Cardio: easy run", how: "3–5 km at a pace where you can still talk" },
+  S: { name: "15 min cardio", how: "Easy jog or skipping, after the weights" },
 };
-const GYM_EX_NAME = Object.fromEntries(Object.values(GYM_EX).flatMap(w => w.items.map(x => [x.id, x.n])));
 const GYM_HEIGHT = 173.8;
 const GYM_IPPT_SEED = [{ d: "2026-10-07", su: 42, pu: 33, run: "11:42", pts: 73 }];
-const isoWeek = dt => { const t = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate())); const dn = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - dn); const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - y0) / 864e5 + 1) / 7); };
-/* what the plan says for a day. Book-out mode (until POP): Sat A, Sun B + 15 min cardio. Full week: A/B take turns each week. */
+const GYM_FOOD = [["m", "3 full meals"], ["s", "2 snacks"], ["p", "Protein every meal"]];
+/* what the plan says for a day */
 function gymPlan(dt, mode) {
   const dow = dt.getDay();
-  if (mode !== "full") return dow === 6 ? { w: "A" } : dow === 0 ? { w: "B", c: "S" } : { camp: true };
-  const odd = isoWeek(dt) % 2 === 1, x = odd ? "B" : "A", y = odd ? "A" : "B";
-  return ({ 1: { w: x }, 2: { c: "I" }, 3: { w: y }, 5: { c: "E" }, 6: { w: x } })[dow] || { rest: true };
+  if (mode !== "full") return dow === 6 ? { w: "L" } : dow === 0 ? { w: "U", c: "S" } : { camp: true };
+  return ({ 1: { w: "U1" }, 2: { w: "L1" }, 3: { c: "I" }, 4: { w: "U2" }, 5: { w: "L2" }, 6: { c: "E" } })[dow] || { rest: true };
 }
-const gymLabel = p => p.camp ? "In camp" : p.rest ? "Rest day" : [p.w && GYM_EX[p.w].name, p.c && GYM_CARDIO[p.c].name].filter(Boolean).join(" + ");
+const gwName = k => (GYM_W[k] && GYM_W[k].name) || GYM_OLDW[k] || "";
+const gymLabel = p => p.camp ? "In camp" : p.rest ? "Rest day" : [p.w && gwName(p.w), p.c && GYM_CARDIO[p.c].name].filter(Boolean).join(" + ");
+const gymKey = p => [p.w, p.c].filter(Boolean).join("+");
+const gymFromKey = k => { const a = String(k || "").split("+"); return { w: a.find(x => GYM_W[x] || GYM_OLDW[x]), c: a.find(x => GYM_CARDIO[x]) }; };
 const gymShort = p => p.camp ? "·" : p.rest ? "–" : (p.w || "") + (p.c ? (p.w ? "+" : "") + "C" : "");
 const gymMonthCount = (log, today) => Object.keys(log || {}).filter(k => k.startsWith(ym(today))).length;
-/* last logged sets for an exercise, before a date */
 function gymLast(log, exId, before) {
   const k = Object.keys(log || {}).filter(x => x < before && log[x].sets && log[x].sets[exId] && log[x].sets[exId].length).sort().pop();
   return k ? { d: k, sets: log[k].sets[exId] } : null;
 }
-const setTxt = (s, bw) => s.map(x => bw ? `${x.r}` : `${x.w}×${x.r}`).join(", ");
+const setTxt = (s, eq) => s.map(x => eq === "bw" ? `${x.r}` : eq === "time" ? `${x.r}s` : `${x.w}×${x.r}`).join(", ");
+const repRange = r => { const m = String(r).match(/(\d+)(?:–(\d+))?/); return m ? [+m[1], +(m[2] || m[1])] : [0, 0]; };
+/* one number for "how good was this set list": top weight (then reps) for weights, best reps or seconds otherwise */
+const gymBest = (sets, eq) => { if (!sets || !sets.length) return null; if (eq === "bw" || eq === "time") return { r: Math.max(...sets.map(z => z.r || 0)) }; const w = Math.max(...sets.map(z => z.w || 0)); return { w, r: Math.max(...sets.filter(z => (z.w || 0) === w).map(z => z.r || 0)) }; };
+const betterThan = (a, b, eq) => !b ? false : (eq === "bw" || eq === "time") ? a.r > b.r : (a.w > b.w || (a.w === b.w && a.r > b.r));
+/* "next time" suggestion (double progression) */
+function gymNext(x, last, deload) {
+  const eq = gxEq(x.id);
+  if (!last) return { text: eq === "bw" ? "Go for your max" : eq === "time" ? "Hold as long as your form is clean" : "First time: pick a weight that leaves about 2 reps spare" };
+  const b = gymBest(last.sets, eq);
+  if (eq === "bw") return { text: `Last best ${b.r}. Aim for ${b.r + 1}+` };
+  if (eq === "time") return { text: `Last best ${b.r}s. Aim for ${b.r + 5}s` };
+  const [lo, hi] = repRange(x.r), inc = eq === "bb" ? 2.5 : 1, w = b.w;
+  const top = last.sets.filter(z => (z.w || 0) === w);
+  if (deload) return { w, text: `Deload week: ${w} kg, easy reps` };
+  if (top.length >= x.s && top.every(z => z.r >= hi)) return { w: r2(w + inc), up: true, text: `Next: ${r2(w + inc)} kg (+${inc}). You earned it` };
+  if (top.some(z => z.r < lo)) return { w, text: `Stay at ${w} kg. Drop to ${r2(Math.max(0, w - inc))} kg if your form breaks` };
+  return { w, text: `Same ${w} kg. Add 1 rep to a set` };
+}
+/* rest timer sound: its own tiny audio, started by your tap so phones allow it */
+let GYM_AC = null;
+const gymAudioInit = () => { try { GYM_AC = GYM_AC || new (window.AudioContext || window.webkitAudioContext)(); if (GYM_AC.state === "suspended") GYM_AC.resume(); } catch (e) {} };
+const gymBeep = () => { try { const c = GYM_AC; if (!c) return; [0, .28, .56].forEach((d, i) => { const o = c.createOscillator(), g = c.createGain(), t = c.currentTime + d; o.type = "sine"; o.frequency.value = i === 2 ? 1320 : 880; g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.3, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + .2); o.connect(g).connect(c.destination); o.start(t); o.stop(t + .22); }); } catch (e) {} };
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, "0")}`;
+function Spark({ pts, unit, label }) {
+  if (pts.length < 2) return <div className="mute small">{pts.length ? "One entry so far. The line appears from the second." : "Nothing logged yet."}</div>;
+  const W = 300, H = 70, ys = pts.map(p => p.v), min = Math.min(...ys), max = Math.max(...ys), rng = max - min || 1;
+  const P = pts.map((p, i) => [10 + i * (W - 20) / (pts.length - 1), H - 12 - (p.v - min) / rng * (H - 26)]);
+  return (
+    <svg className="gym-spark" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${label}: from ${ys[0]}${unit} to ${ys[ys.length - 1]}${unit}`}>
+      <polyline points={P.map(q => q.join(",")).join(" ")} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
+      {P.map((q, i) => <circle key={i} cx={q[0]} cy={q[1]} r="3.2" fill="currentColor" />)}
+      <text x="10" y="11" className="gs-t">{max}{unit}</text><text x="10" y={H - 1} className="gs-t">{min}{unit}</text>
+    </svg>
+  );
+}
 
 /* small card on Money → Week: today's training, one tap to the Gym tab */
 function GymToday({ settings, today, onOpen }) {
@@ -1643,40 +1697,241 @@ function GymToday({ settings, today, onOpen }) {
   );
 }
 
+/* ---------- the session: logger + rest timer + suggestions + form tips ---------- */
+function GymSession({ g, mode, log, t, plan, today, act }) {
+  const DKEY = "ascent-gym-draft-" + t;
+  const [draft, setDraftRaw] = useState(() => { try { return JSON.parse(lsGet(DKEY, "null")); } catch (e) { return null; } });
+  const [open, setOpen] = useState(null); // exercise id with tips open
+  const [rest, setRest] = useState(null); // { end, total, name }
+  const [, setNow] = useState(0);
+  const rang = useRef(false);
+  const dr = draft || { sets: {}, cardio: { min: "", km: "" }, pick: null };
+  const pick = dr.pick ? gymFromKey(dr.pick) : null;
+  const ses = pick || ((plan.camp || plan.rest) ? null : plan);
+  const setDraft = v => { setDraftRaw(v); lsSet(DKEY, JSON.stringify(v)); };
+  const start = parseDate(g.start || "2026-11-07"), weekN = today >= start ? Math.floor(diffDays(today, start) / 7) + 1 : 0, deload = weekN > 0 && weekN % 6 === 0;
+  useEffect(() => {
+    if (!rest) return;
+    const id = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= rest.end && !rang.current) { rang.current = true; gymBeep(); buzz([220, 90, 220]); setTimeout(() => setRest(r => r && Date.now() >= r.end ? null : r), 4000); }
+    }, 250);
+    return () => clearInterval(id);
+  }, [rest]);
+  const startRest = (sec, name) => { gymAudioInit(); rang.current = false; setRest({ end: Date.now() + sec * 1000, total: sec, name }); };
+  const upd = (exId, i, f, v) => { const sets = { ...dr.sets }; const arr = (sets[exId] || []).slice(); arr[i] = { ...(arr[i] || { w: "", r: "" }), [f]: v }; sets[exId] = arr; setDraft({ ...dr, sets }); };
+  const tick = (x, i, nSets, sug, isLastEx) => {
+    const eq = gxEq(x.id), arr = (dr.sets[x.id] || []).slice(), z = { ...(arr[i] || { w: "", r: "" }) };
+    if (z.ok) { z.ok = false; arr[i] = z; setDraft({ ...dr, sets: { ...dr.sets, [x.id]: arr } }); return; }
+    if (eq !== "bw" && eq !== "time" && !String(z.w).trim() && sug && sug.w) z.w = String(sug.w);
+    if (!String(z.r).trim()) z.r = String(eq === "bw" ? "" : repRange(x.r)[0] || "");
+    if (!(num(z.r) > 0)) { flashGym("Type your reps first"); return; }
+    z.ok = true; arr[i] = z; setDraft({ ...dr, sets: { ...dr.sets, [x.id]: arr } });
+    Sound.tick(); buzz(8);
+    if (!(isLastEx && i === nSets - 1)) startRest(x.rest || 90, gxName(x.id));
+  };
+  const [msg, setMsg] = useState(""); const flashGym = m => { setMsg(m); setTimeout(() => setMsg(""), 2200); };
+  const finish = () => {
+    const sets = {}, prs = [];
+    if (ses && ses.w && GYM_W[ses.w]) GYM_W[ses.w].items.forEach(x => {
+      const eq = gxEq(x.id);
+      const s = (dr.sets[x.id] || []).filter(z => z && num(z.r) > 0).map(z => eq === "bw" || eq === "time" ? { r: num(z.r) } : { w: num(z.w) || 0, r: num(z.r) });
+      if (!s.length) return;
+      sets[x.id] = s;
+      const prevAll = Object.keys(log).filter(k => k !== t && log[k].sets && log[k].sets[x.id]).flatMap(k => log[k].sets[x.id]);
+      const nb = gymBest(s, eq), pb = gymBest(prevAll, eq);
+      if (betterThan(nb, pb, eq)) prs.push(`${gxName(x.id)} ${eq === "bw" ? nb.r + " reps" : eq === "time" ? nb.r + "s" : nb.w + " kg × " + nb.r}`);
+    });
+    const cardio = ses && ses.c ? { min: num(dr.cardio.min) || null, km: num(dr.cardio.km) || null } : null;
+    if (!Object.keys(sets).length && !(cardio && (cardio.min || cardio.km))) { flashGym("Log at least one set first"); return; }
+    act.gymFinish(t, { k: gymKey(ses), sets, ...(cardio ? { cardio } : {}), at: new Date().toISOString() }, gymLabel(ses), prs);
+    try { localStorage.removeItem(DKEY); } catch (e) {}
+    setDraftRaw(null); setRest(null);
+  };
+  const entry = log[t];
+  if (entry) { const p = gymFromKey(entry.k), vol = Object.entries(entry.sets || {}).reduce((a, [, s]) => a + s.reduce((b, z) => b + (z.w || 0) * (z.r || 0), 0), 0); return (
+    <div className="safe reveal gym-today">
+      <div className="row"><span className="caps mute">Today · {dayLabel(today)}</span><span className="caps mute">logged</span></div>
+      <div className="safe-v gym-t">Done ✓</div>
+      <div className="safe-sub">{gymLabel(p)}{vol ? ` · ${Math.round(vol).toLocaleString()} kg lifted` : ""}{entry.cardio && entry.cardio.min ? ` · ${entry.cardio.min} min` : ""}{entry.cardio && entry.cardio.km ? ` · ${entry.cardio.km} km` : ""}. Eat well tonight: protein + rice.</div>
+    </div>); }
+  const choices = mode === "full" ? [["U1", "Upper S"], ["L1", "Lower S"], ["U2", "Upper V"], ["L2", "Lower V"], ["E", "Cardio"]] : [["L", "Lower"], ["U", "Upper"], ["E", "Cardio"]];
+  if (!ses) return (
+    <div className="safe reveal gym-today">
+      <div className="row"><span className="caps mute">Today · {dayLabel(today)}</span></div>
+      <div className="safe-v gym-t">{plan.camp ? "In camp" : "Rest day"}</div>
+      <div className="safe-sub">{plan.camp ? "BMT is your training this week. Eat every meal and sleep when you can." : "Rest is when muscle grows. Eat well, walk a little."}</div>
+      <div className="minis"><span className="mute small" style={{ alignSelf: "center" }}>Training anyway?</span>{choices.map(([k, l]) => <button key={k} className="chip-btn" onClick={() => setDraft({ ...dr, pick: k })}>{l}</button>)}</div>
+    </div>);
+  const W = ses.w && GYM_W[ses.w];
+  const items = W ? W.items : [];
+  const sugs = Object.fromEntries(items.map(x => [x.id, gymNext(x, gymLast(log, x.id, t), deload)]));
+  const setup = items.filter(x => sugs[x.id] && sugs[x.id].w != null).map(x => `${gxName(x.id).replace(/^(Barbell|Dumbbell|One-arm dumbbell|Seated dumbbell|Weighted) /i, "")} ${sugs[x.id].w} kg`);
+  const left = rest ? Math.ceil((rest.end - Date.now()) / 1000) : 0;
+  return (
+    <div className="safe reveal gym-today">
+      <div className="row"><span className="caps mute">Today · {dayLabel(today)}</span><span className="caps mute">{weekN ? "Week " + weekN : "Starts " + dayLabel(start)}</span></div>
+      <div className="safe-v gym-t">{gymLabel(ses)}</div>
+      {deload && <div className="gym-deload">Deload week: same exercises, half the sets, lighter feel. Your body catches up this week.</div>}
+      <div className="safe-sub">Warm up 5 min: skipping or jogging on the spot, arm circles, 10 bodyweight squats, then 2 light sets of the first exercise.</div>
+      {setup.length > 0 && <div className="gym-setup"><span className="caps mute">Set up your weights</span><div>{setup.join(" · ")}</div></div>}
+      {items.map((x, xi) => {
+        const eq = gxEq(x.id), ex = GX[x.id] || {}, nS = deload ? Math.ceil(x.s / 2) : x.s, last = gymLast(log, x.id, t), sug = sugs[x.id], arr = dr.sets[x.id] || [];
+        const doneN = arr.filter(z => z && z.ok).length;
+        return (
+          <div className={"gym-ex" + (doneN >= nS ? " all" : "")} key={x.id}>
+            <div className="gym-exh"><b>{gxName(x.id)}</b><span className="mute">{nS} × {x.r} · rest {mmss(x.rest)}</span></div>
+            <div className="gym-meta">
+              {last && <span className="mute small">Last: {setTxt(last.sets, eq)}</span>}
+              {sug && <span className={"small gym-sug" + (sug.up ? " up" : "")}>{sug.text}</span>}
+            </div>
+            <button className="linkbtn small" aria-expanded={open === x.id} onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? "Hide form tips" : "Form tips"}</button>
+            {open === x.id && <div className="gym-tips">
+              <div className="mute small">Works: {ex.mus}</div>
+              <ol>{(ex.tips || []).map((tp, i) => <li key={i}>{tp}</li>)}</ol>
+              <a className="linkbtn small" href={"https://www.youtube.com/results?search_query=" + encodeURIComponent(gxName(x.id).replace(/ \(IPPT\)/, "") + " proper form")} target="_blank" rel="noopener noreferrer">Watch how-to videos ↗</a>
+            </div>}
+            <div className="gym-sets">{Array.from({ length: nS }, (_, i) => { const z = arr[i] || {}; return (
+              <div className={"gym-set" + (eq === "bw" || eq === "time" ? " bw" : "") + (z.ok ? " ok" : "")} key={i}>
+                <span className="mute">S{i + 1}</span>
+                {eq !== "bw" && eq !== "time" && <input className="field mini" inputMode="decimal" placeholder={sug && sug.w != null ? String(sug.w) : "kg"} aria-label={`${gxName(x.id)} set ${i + 1} weight in kg`} value={z.w || ""} onChange={e => upd(x.id, i, "w", e.target.value)} />}
+                <input className="field mini" inputMode="numeric" placeholder={eq === "time" ? "sec" : "reps"} aria-label={`${gxName(x.id)} set ${i + 1} ${eq === "time" ? "seconds" : "reps"}`} value={z.r || ""} onChange={e => upd(x.id, i, "r", e.target.value)} />
+                <button className="gym-ok" aria-pressed={!!z.ok} aria-label={`${z.ok ? "Undo" : "Done"}: set ${i + 1} of ${gxName(x.id)}`} onClick={() => tick(x, i, nS, sug, xi === items.length - 1)}>{z.ok ? <Tick /> : "✓"}</button>
+              </div>); })}</div>
+          </div>);
+      })}
+      {ses.c && <div className="gym-ex">
+        <div className="gym-exh"><b>{GYM_CARDIO[ses.c].name}</b></div>
+        <div className="mute small">{GYM_CARDIO[ses.c].how}</div>
+        <div className="gym-sets">
+          <div className="gym-set one"><span className="mute">Min</span><input className="field mini" inputMode="numeric" placeholder="min" aria-label="Cardio minutes" value={dr.cardio.min || ""} onChange={e => setDraft({ ...dr, cardio: { ...dr.cardio, min: e.target.value } })} /></div>
+          <div className="gym-set one"><span className="mute">Km</span><input className="field mini" inputMode="decimal" placeholder="km" aria-label="Cardio distance in km" value={dr.cardio.km || ""} onChange={e => setDraft({ ...dr, cardio: { ...dr.cardio, km: e.target.value } })} /></div>
+        </div>
+      </div>}
+      {msg && <div className="gym-msg" role="status">{msg}</div>}
+      <div className="minis"><button className="chip-btn solid2" onClick={finish}>Finish workout ✓</button>{dr.pick && <button className="chip-btn" onClick={() => setDraft({ ...dr, pick: null })}>Cancel</button>}</div>
+      {rest && <div className={"gym-rest" + (left <= 0 ? " go" : "")} role="timer" aria-live="polite">
+        <div><span className="caps">{left > 0 ? "Rest" : "Go"}</span><b className="num">{left > 0 ? mmss(left) : "Next set!"}</b><small>{rest.name}</small></div>
+        <div className="gym-rbar"><i style={{ width: Math.max(0, Math.min(100, (1 - left / rest.total) * 100)) + "%" }} /></div>
+        <div className="gym-rbtn"><button onClick={() => setRest(r => r && { ...r, end: r.end + 30000, total: r.total + 30 })}>+30s</button><button onClick={() => setRest(null)}>Skip</button></div>
+      </div>}
+    </div>
+  );
+}
+
+/* ---------- body: BMI, calories, protein, weight trend ---------- */
+function GymBody({ g, mode, today, act }) {
+  const t = ymd(today);
+  const [kg, setKg] = useState(""); const [edit, setEdit] = useState(false);
+  const [h, setH] = useState(String(g.height || GYM_HEIGHT)); const [age, setAge] = useState(String(g.age || 25));
+  const goal = g.goal || "gain";
+  const body = (g.body || []).slice().sort((a, b) => a.d < b.d ? -1 : 1), last = body.length ? body[body.length - 1] : null;
+  const H = (g.height || GYM_HEIGHT) / 100, AGE = g.age || 25;
+  const bmi = last ? last.kg / (H * H) : null;
+  const cat = bmi == null ? "" : bmi < 18.5 ? "underweight" : bmi < 25 ? "healthy" : bmi < 30 ? "overweight" : "obese";
+  const lo = r2(18.5 * H * H).toFixed(1), hi = r2(24.9 * H * H).toFixed(1), dis = r2(25 * H * H).toFixed(1);
+  const bmr = last ? 10 * last.kg + 6.25 * H * 100 - 5 * AGE + 5 : null;
+  const adj = goal === "gain" ? 300 : goal === "lose" ? -400 : 0, rnd = v => Math.round(v / 50) * 50;
+  const days = mode === "full" ? [["Training day", 1.55], ["Rest day", 1.375]] : [["Camp day (BMT)", 1.725], ["Home day", 1.375]];
+  let trend = "Log your weight once a week, same time (morning, after the toilet).";
+  if (body.length >= 2) {
+    const ref = body.find(b => diffDays(parseDate(last.d), parseDate(b.d)) <= 35) || body[0], span = diffDays(parseDate(last.d), parseDate(ref.d));
+    if (span >= 10) {
+      const rate = (last.kg - ref.kg) / span * 7, rs = (rate >= 0 ? "+" : "") + rate.toFixed(2) + " kg/week";
+      trend = goal === "gain" ? (rate < 0.15 ? `${rs}: too slow. Add one more snack a day.` : rate <= 0.6 ? `${rs}: on track.` : `${rs}: fast. Fine, keep protein high.`)
+        : goal === "lose" ? (rate > -0.2 ? `${rs}: too slow. Trim one snack a day.` : rate >= -0.8 ? `${rs}: on track.` : `${rs}: too fast. Eat a bit more.`)
+        : (Math.abs(rate) < 0.2 ? `${rs}: steady.` : `${rs}: drifting. Adjust snacks.`);
+    } else trend = "Keep logging weekly. The trend shows after about 2 weeks.";
+  }
+  const toGo = last && goal === "gain" ? Math.max(0, r2(55 - last.kg)) : 0;
+  return (
+    <div className="box reveal gym-prog">
+      <div className="row"><span className="caps mute">Body</span><button className="linkbtn small" onClick={() => setEdit(!edit)}>{edit ? "Close" : "Edit details"}</button></div>
+      {edit && <div className="gym-sets">
+        <div className="gym-set one"><span className="mute">Height</span><input className="field mini" inputMode="decimal" aria-label="Height in cm" value={h} onChange={e => setH(e.target.value)} /></div>
+        <div className="gym-set one"><span className="mute">Age</span><input className="field mini" inputMode="numeric" aria-label="Age" value={age} onChange={e => setAge(e.target.value)} /></div>
+        <div className="minis"><span className="mute small" style={{ alignSelf: "center" }}>Goal:</span>{[["gain", "Gain muscle"], ["maintain", "Maintain"], ["lose", "Lose fat"]].map(([k, l]) => <button key={k} className={"cat" + (goal === k ? " on" : "")} aria-pressed={goal === k} onClick={() => act.gymPatch({ goal: k })}>{l}</button>)}</div>
+        <div className="minis"><button className="chip-btn solid2" disabled={!(num(h) > 120 && num(h) < 230 && num(age) > 12 && num(age) < 90)} onClick={() => { act.gymPatch({ height: r2(num(h)), age: Math.round(num(age)) }, "Details saved"); setEdit(false); }}>Save details</button></div>
+      </div>}
+      <div className="gym-stats">
+        <div><span className="caps mute">Weight</span><b className="num">{last ? last.kg + " kg" : "–"}</b><small className="mute">{last ? dayLabel(parseDate(last.d)) : "not logged"}</small></div>
+        <div><span className="caps mute">BMI</span><b className="num">{bmi ? bmi.toFixed(1) : "–"}</b><small className={"mute" + (cat === "underweight" ? " warn" : "")}>{cat || (g.height || GYM_HEIGHT) + " cm"}</small></div>
+        <div><span className="caps mute">Protein</span><b className="num">{last ? `${Math.round(last.kg * 1.6)}–${Math.round(last.kg * 2.2)} g` : "–"}</b><small className="mute">a day</small></div>
+      </div>
+      {bmr && <div className="gym-kcal">{days.map(([l, m]) => <div key={l}><span className="caps mute">{l}</span><b className="num">{rnd(bmr * m + adj).toLocaleString()} kcal</b></div>)}</div>}
+      <div className="small mute">Healthy for your height: {lo}–{hi} kg · DIS limit (BMI under 25): up to {dis} kg{goal === "gain" ? " · your target: 55–58 kg" : ""}{toGo > 0 ? ` · ${toGo} kg to go` : ""}</div>
+      <Spark pts={body.slice(-12).map(b => ({ v: b.kg }))} unit=" kg" label="Body weight" />
+      <div className="small">{trend}</div>
+      <div className="addrow"><input className="field" inputMode="decimal" placeholder="Today's weight, kg" aria-label="Today's weight in kg" value={kg} onChange={e => setKg(e.target.value)} />
+        <button className="cta" disabled={!(num(kg) > 25 && num(kg) < 200)} onClick={() => { act.gymPatch({ body: [...(g.body || []).filter(b => b.d !== t), { d: t, kg: r2(num(kg)) }] }, "Weight saved"); setKg(""); }}>Save</button></div>
+      <div className="mute small">Estimates from a standard formula (Mifflin-St Jeor), not medical advice.</div>
+    </div>
+  );
+}
+
+/* ---------- daily food check (easier than counting calories with packed BMT food) ---------- */
+function GymFood({ g, today, act }) {
+  const t = ymd(today), food = g.food || {}, on = food[t] || [];
+  const week = Array.from({ length: 7 }, (_, i) => addDays(today, i - 6));
+  const toggle = id => {
+    const f = { ...food }, cur = f[t] || [], was = cur.includes(id); f[t] = was ? cur.filter(x => x !== id) : [...cur, id];
+    const cut = ymd(addDays(today, -120)); Object.keys(f).forEach(k => { if (k < cut) delete f[k]; });
+    if (!was) { Sound.check(); buzz(8); } else Sound.tick();
+    act.gymPatch({ food: f });
+  };
+  const full = week.filter(dt => (food[ymd(dt)] || []).length >= GYM_FOOD.length).length;
+  return (
+    <div className="box reveal">
+      <div className="row"><span className="caps mute">Food check · today</span><span className="caps mute">{full}/7 full days this week</span></div>
+      {GYM_FOOD.map(([id, l]) => <button key={id} className={"quest" + (on.includes(id) ? " done" : "")} aria-pressed={on.includes(id)} onClick={() => toggle(id)}>
+        <span className="i">{on.includes(id) ? "✓" : "·"}</span><span><div className="t">{l}</div></span><span className="a" /><span className="ck"><Tick /></span></button>)}
+      <div className="hb-week m">{week.map(dt => <i key={ymd(dt)} className={(food[ymd(dt)] || []).length >= GYM_FOOD.length ? "on" : ""} title={dayLabel(dt)} />)}<em>last 7 days</em></div>
+    </div>
+  );
+}
+
+/* ---------- history + charts ---------- */
+function GymHistory({ g, log }) {
+  const keys = Object.keys(log).sort().reverse();
+  const [openK, setOpenK] = useState(null); const [ex, setEx] = useState(null);
+  const freq = {}; keys.forEach(k => Object.keys(log[k].sets || {}).forEach(id => { freq[id] = (freq[id] || 0) + 1; }));
+  const exs = Object.keys(freq).sort((a, b) => freq[b] - freq[a]).slice(0, 10), cur = ex && exs.includes(ex) ? ex : exs[0];
+  const eq = cur ? gxEq(cur) : "db";
+  const pts = cur ? keys.slice().reverse().filter(k => log[k].sets && log[k].sets[cur]).slice(-12).map(k => { const b = gymBest(log[k].sets[cur], eq); return { v: eq === "bw" || eq === "time" ? b.r : b.w }; }) : [];
+  const best = {}; keys.forEach(k => Object.entries(log[k].sets || {}).forEach(([id, s]) => { const e = gxEq(id), b = gymBest(s, e); if (!best[id] || betterThan(b, best[id], e)) best[id] = b; }));
+  if (!keys.length) return <div className="box reveal"><span className="caps mute">History</span><div className="mute small">Your workouts, charts and personal records show here after your first session.</div></div>;
+  return (
+    <div className="box reveal">
+      <span className="caps mute">Progress chart</span>
+      <div className="typechips" style={{ margin: "4px 0" }}>{exs.map(id => <button key={id} className={"cat" + (id === cur ? " on" : "")} onClick={() => setEx(id)}>{gxName(id).replace(/ \(IPPT\)/, "")}</button>)}</div>
+      {cur && <Spark pts={pts} unit={eq === "bw" ? "" : eq === "time" ? "s" : " kg"} label={gxName(cur)} />}
+      <span className="caps mute" style={{ marginTop: 8 }}>Personal records</span>
+      <div className="small gym-prs">{Object.entries(best).map(([id, b]) => <div key={id}>{gxName(id)}: <b>{gxEq(id) === "bw" ? b.r + " reps" : gxEq(id) === "time" ? b.r + "s" : b.w + " kg × " + b.r}</b></div>)}</div>
+      <span className="caps mute" style={{ marginTop: 8 }}>History</span>
+      {keys.slice(0, 12).map(k => { const e = log[k], vol = Object.values(e.sets || {}).reduce((a, s) => a + s.reduce((b, z) => b + (z.w || 0) * (z.r || 0), 0), 0); return (
+        <div key={k}>
+          <button className="gym-hrow" aria-expanded={openK === k} onClick={() => setOpenK(openK === k ? null : k)}>
+            <span>{dayLabel(parseDate(k))}</span><b>{gymLabel(gymFromKey(e.k)) || "Workout"}</b><span className="mute">{vol ? Math.round(vol).toLocaleString() + " kg" : e.cardio && e.cardio.km ? e.cardio.km + " km" : ""}</span>
+          </button>
+          {openK === k && <div className="small gym-hdet">{Object.entries(e.sets || {}).map(([id, s]) => <div key={id}>{gxName(id)}: {setTxt(s, gxEq(id))}</div>)}{e.cardio && (e.cardio.min || e.cardio.km) ? <div>Cardio: {e.cardio.min ? e.cardio.min + " min" : ""}{e.cardio.km ? " · " + e.cardio.km + " km" : ""}</div> : null}</div>}
+        </div>); })}
+    </div>
+  );
+}
+
 function GymSection({ settings, today, act }) {
   const g = settings.gym || {}, mode = g.mode || "bookout", log = g.log || {};
-  const t = ymd(today), plan = gymPlan(today, mode), entry = log[t];
-  const DKEY = "ascent-gym-draft-" + t;
-  const readDraft = () => { try { return JSON.parse(lsGet(DKEY, "null")); } catch (e) { return null; } };
-  const [draft, setDraftRaw] = useState(readDraft);
-  const [pick, setPick] = useState(null); // do a session on a camp / rest day
-  const [kg, setKg] = useState(""); const [ipptForm, setIpptForm] = useState(null);
-  const today_ = pick || ((plan.camp || plan.rest) ? null : plan);
-  const setDraft = v => { setDraftRaw(v); lsSet(DKEY, JSON.stringify(v)); };
-  const dr = draft || { sets: {}, cardio: { min: "", km: "" } };
-  const upd = (exId, i, f, v) => { const sets = { ...dr.sets }; const arr = (sets[exId] || []).slice(); arr[i] = { ...(arr[i] || { w: "", r: "" }), [f]: v }; sets[exId] = arr; setDraft({ ...dr, sets }); };
-  const updC = (f, v) => setDraft({ ...dr, cardio: { ...dr.cardio, [f]: v } });
-  const finish = () => {
-    const sets = {};
-    if (today_ && today_.w) GYM_EX[today_.w].items.forEach(x => { const s = (dr.sets[x.id] || []).filter(z => z && num(z.r) > 0).map(z => x.bw ? { r: num(z.r) } : { w: num(z.w) || 0, r: num(z.r) }); if (s.length) sets[x.id] = s; });
-    const cardio = today_ && today_.c ? { min: num(dr.cardio.min) || null, km: num(dr.cardio.km) || null } : null;
-    act.gymFinish(t, { k: [today_.w, today_.c].filter(Boolean).join("+"), sets, ...(cardio ? { cardio } : {}), at: new Date().toISOString() }, gymLabel(today_));
-    try { localStorage.removeItem(DKEY); } catch (e) {}
-    setDraftRaw(null); setPick(null);
-  };
-  /* this week, Mon → Sun */
+  const t = ymd(today), plan = gymPlan(today, mode);
+  const [ipptForm, setIpptForm] = useState(null);
   const mon = addDays(today, -((today.getDay() + 6) % 7));
   const week = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
-  const body = (g.body || []).slice().sort((a, b) => a.d < b.d ? -1 : 1), lastKg = body.length ? body[body.length - 1] : null;
-  const bmi = lastKg ? lastKg.kg / Math.pow((g.height || GYM_HEIGHT) / 100, 2) : null;
   const ippt = (g.ippt || GYM_IPPT_SEED).slice().sort((a, b) => a.d < b.d ? -1 : 1), lastI = ippt[ippt.length - 1];
   const photo0 = parseDate(g.photoStart || "2026-11-02"), photos = g.photos || [];
   let nextPhoto = photo0; while (ymd(nextPhoto) <= (photos.slice().sort().pop() || "")) nextPhoto = new Date(nextPhoto.getFullYear(), nextPhoto.getMonth() + 1, photo0.getDate());
-  const best = {}; Object.values(log).forEach(e => Object.entries(e.sets || {}).forEach(([id, s]) => s.forEach(z => { if (z.w && (!best[id] || z.w > best[id].w || (z.w === best[id].w && z.r > best[id].r))) best[id] = z; })));
   const monthN = gymMonthCount(log, today);
   return (
     <section className="block wrap" id="gym">
-      <div className="sechead"><Scramble text="GYM" /><span className="idx">{monthN} workout{monthN === 1 ? "" : "s"} this month<br />{mode === "full" ? "full week plan" : "book-out weekends"}</span></div>
+      <div className="sechead"><Scramble text="GYM" /><span className="idx">{monthN} workout{monthN === 1 ? "" : "s"} this month<br />{mode === "full" ? "phase 2 · full week" : "phase 1 · weekends"}</span></div>
 
       <div className="gym-week reveal" aria-label="This week's plan">
         {week.map(dt => { const k = ymd(dt), p = gymPlan(dt, mode), dn = !!log[k]; return (
@@ -1685,66 +1940,30 @@ function GymSection({ settings, today, act }) {
           </span>); })}
       </div>
 
-      <div className="safe reveal gym-today">
-        <div className="row"><span className="caps mute">Today · {dayLabel(today)}</span><span className="caps mute">{entry ? "logged" : ""}</span></div>
-        {entry ? <>
-          <div className="safe-v gym-t">Done ✓</div>
-          <div className="safe-sub">{gymLabel({ w: entry.k.split("+").find(x => GYM_EX[x]), c: entry.k.split("+").find(x => GYM_CARDIO[x]) })}{entry.cardio && entry.cardio.min ? ` · ${entry.cardio.min} min` : ""}{entry.cardio && entry.cardio.km ? ` · ${entry.cardio.km} km` : ""}. Eat well tonight: protein + rice.</div>
-        </> : !today_ ? <>
-          <div className="safe-v gym-t">{plan.camp ? "In camp" : "Rest day"}</div>
-          <div className="safe-sub">{plan.camp ? "BMT is your training this week. Eat every meal and sleep when you can." : "Rest is when muscle grows. Eat well, walk a little."}</div>
-          <div className="minis"><span className="mute small" style={{ alignSelf: "center" }}>Training anyway?</span>{[["A", { w: "A" }], ["B", { w: "B" }], ["Cardio", { c: "E" }]].map(([l, p]) => <button key={l} className="chip-btn" onClick={() => setPick(p)}>{l}</button>)}</div>
-        </> : <>
-          <div className="safe-v gym-t">{gymLabel(today_)}</div>
-          <div className="safe-sub">Warm up 5 min · rest 60–90 s between sets · don't go to failure on the bench alone.</div>
-          {today_.w && GYM_EX[today_.w].items.map(x => { const last = gymLast(log, x.id, t); return (
-            <div className="gym-ex" key={x.id}>
-              <div className="gym-exh"><b>{x.n}</b><span className="mute">{x.s} × {x.r}</span></div>
-              {last && <div className="mute small">Last: {setTxt(last.sets, x.bw)}</div>}
-              <div className="gym-sets">{Array.from({ length: x.s }, (_, i) => { const z = (dr.sets[x.id] || [])[i] || {}; return (
-                <div className="gym-set" key={i}>
-                  <span className="mute">S{i + 1}</span>
-                  {!x.bw && <input className="field mini" inputMode="decimal" placeholder="kg" aria-label={`${x.n} set ${i + 1} weight in kg`} value={z.w || ""} onChange={e => upd(x.id, i, "w", e.target.value)} />}
-                  <input className="field mini" inputMode="numeric" placeholder="reps" aria-label={`${x.n} set ${i + 1} reps`} value={z.r || ""} onChange={e => upd(x.id, i, "r", e.target.value)} />
-                </div>); })}</div>
-            </div>); })}
-          {today_.c && <div className="gym-ex">
-            <div className="gym-exh"><b>{GYM_CARDIO[today_.c].name}</b></div>
-            <div className="mute small">{GYM_CARDIO[today_.c].how}</div>
-            <div className="gym-sets">
-              <div className="gym-set"><span className="mute">Min</span><input className="field mini" inputMode="numeric" placeholder="min" aria-label="Cardio minutes" value={dr.cardio.min || ""} onChange={e => updC("min", e.target.value)} /></div>
-              <div className="gym-set"><span className="mute">Km</span><input className="field mini" inputMode="decimal" placeholder="km" aria-label="Cardio distance in km" value={dr.cardio.km || ""} onChange={e => updC("km", e.target.value)} /></div>
-            </div>
-          </div>}
-          <div className="minis"><button className="chip-btn solid2" onClick={finish}>Finish workout ✓</button>{pick && <button className="chip-btn" onClick={() => setPick(null)}>Cancel</button>}</div>
-        </>}
-      </div>
+      <GymSession key={t} g={g} mode={mode} log={log} t={t} plan={plan} today={today} act={act} />
+      <GymBody g={g} mode={mode} today={today} act={act} />
+      <GymFood g={g} today={today} act={act} />
 
       <div className="box reveal gym-prog">
-        <div className="caps mute">Body weight</div>
-        <div><b className="num">{lastKg ? lastKg.kg + " kg" : "Not logged yet"}</b>{bmi ? <span className="mute small"> · BMI {bmi.toFixed(1)} · target 55–58 kg</span> : <span className="mute small"> · target 55–58 kg</span>}</div>
-        <div className="addrow"><input className="field" inputMode="decimal" placeholder="Today's weight, kg" aria-label="Today's weight in kg" value={kg} onChange={e => setKg(e.target.value)} />
-          <button className="cta" disabled={!(num(kg) > 25 && num(kg) < 200)} onClick={() => { act.gymPatch({ body: [...(g.body || []).filter(b => b.d !== t), { d: t, kg: r2(num(kg)) }] }, "Weight saved"); setKg(""); }}>Save</button></div>
-        <div className="caps mute" style={{ marginTop: 8 }}>Progress photos</div>
-        <div className="small">Front, side, back · same spot and light. Next: <b>{dayLabel(nextPhoto)}</b>{photos.length ? ` · ${photos.length} done` : ""}</div>
-        <div className="minis"><button className="chip-btn" onClick={() => act.gymPatch({ photos: [...photos.filter(p => p !== t), t] }, "Photos logged")}>Took them today ✓</button></div>
-        <div className="caps mute" style={{ marginTop: 8 }}>IPPT</div>
+        <span className="caps mute">IPPT</span>
         <div className="small">Last: <b>{lastI.pts} pts</b> ({dayLabel(parseDate(lastI.d))}) · sit-ups {lastI.su} · push-ups {lastI.pu} · 2.4 km {lastI.run}{lastI.pts < 75 ? ` · Silver is ${75 - lastI.pts} away` : lastI.pts < 85 ? ` · Gold is ${85 - lastI.pts} away` : " · Gold ✓"}</div>
+        {ippt.length > 1 && <Spark pts={ippt.map(x => ({ v: x.pts }))} unit=" pts" label="IPPT points" />}
         {ipptForm ? <div className="gym-sets" style={{ marginTop: 6 }}>
-          {[["su", "Sit-ups"], ["pu", "Push-ups"], ["run", "2.4 km (mm:ss)"], ["pts", "Points"]].map(([f, l]) => <div className="gym-set" key={f}><span className="mute">{l}</span><input className="field mini" inputMode={f === "run" ? "text" : "numeric"} aria-label={l} value={ipptForm[f]} onChange={e => setIpptForm({ ...ipptForm, [f]: e.target.value })} /></div>)}
+          {[["su", "Sit-ups"], ["pu", "Push-ups"], ["run", "2.4 km (mm:ss)"], ["pts", "Points"]].map(([f, l]) => <div className="gym-set one" key={f}><span className="mute">{l}</span><input className="field mini" inputMode={f === "run" ? "text" : "numeric"} aria-label={l} value={ipptForm[f]} onChange={e => setIpptForm({ ...ipptForm, [f]: e.target.value })} /></div>)}
           <div className="minis"><button className="chip-btn solid2" disabled={!(num(ipptForm.pts) > 0)} onClick={() => { act.gymPatch({ ippt: [...ippt.filter(x => x.d !== t), { d: t, su: num(ipptForm.su) || 0, pu: num(ipptForm.pu) || 0, run: ipptForm.run || "", pts: num(ipptForm.pts) }] }, "IPPT saved"); setIpptForm(null); }}>Save result</button><button className="chip-btn" onClick={() => setIpptForm(null)}>Cancel</button></div>
         </div> : <div className="minis"><button className="chip-btn" onClick={() => setIpptForm({ su: "", pu: "", run: "", pts: "" })}>+ Add IPPT result</button></div>}
-        {Object.keys(best).length > 0 && <>
-          <div className="caps mute" style={{ marginTop: 8 }}>Best lifts</div>
-          <div className="small">{Object.entries(best).map(([id, z]) => <div key={id}>{GYM_EX_NAME[id] || id}: <b>{z.w} kg × {z.r}</b></div>)}</div>
-        </>}
+        <span className="caps mute" style={{ marginTop: 8 }}>Progress photos</span>
+        <div className="small">Front, side, back · same spot and light. {nextPhoto <= today ? <b>Due now (since {dayLabel(nextPhoto)})</b> : <>Next: <b>{dayLabel(nextPhoto)}</b></>}{photos.length ? ` · ${photos.length} done` : ""}</div>
+        <div className="minis"><button className="chip-btn" onClick={() => act.gymPatch({ photos: [...photos.filter(p => p !== t), t] }, "Photos logged")}>Took them today ✓</button></div>
       </div>
+
+      <GymHistory g={g} log={log} />
 
       <div className="minis reveal">
         <span className="mute small" style={{ alignSelf: "center" }}>Plan:</span>
-        {[["bookout", "Book-out weekends"], ["full", "Full week"]].map(([m, l]) => <button key={m} className={"cat" + (mode === m ? " on" : "")} aria-pressed={mode === m} onClick={() => mode !== m && act.gymPatch({ mode: m }, m === "full" ? "Full-week plan on" : "Weekend plan on")}>{l}</button>)}
+        {[["bookout", "Phase 1 · weekends"], ["full", "Phase 2 · full week"]].map(([m, l]) => <button key={m} className={"cat" + (mode === m ? " on" : "")} aria-pressed={mode === m} onClick={() => mode !== m && act.gymPatch({ mode: m }, m === "full" ? "Phase 2 on" : "Phase 1 on")}>{l}</button>)}
       </div>
-      <p className="mute small reveal" style={{ marginTop: 8 }}>{mode === "full" ? "Mon A · Tue intervals · Wed B · Thu rest · Fri easy run · Sat A · Sun rest. A and B swap each week." : "Until POP: Saturday Weights A, Sunday Weights B + 15 min cardio. Switch to Full week after POP."} Add 1–2 reps a week; when every set hits the top of the range, add a little weight.</p>
+      <p className="mute small reveal" style={{ marginTop: 8 }}>{mode === "full" ? "Mon upper strength · Tue lower strength · Wed intervals · Thu upper volume · Fri lower volume · Sat easy run · Sun rest." : "Until POP: Saturday lower body + core, Sunday upper body + 15 min cardio. Legs on Saturday so they recover before Monday's BMT. Switch to Phase 2 after POP."} Every 6th week is a deload: same exercises, half the sets. Stop 1–2 reps before failure when training alone.</p>
     </section>
   );
 }
@@ -2914,13 +3133,14 @@ function Main({ session, mode, setMode }) {
     addHabit: name => { act.patchSettings({ habits: [...(settings.habits || []), { id: uid(), name, since: ymd(today) }] }, `${name} added`); },
     removeHabit: id => { act.patchSettings({ habits: (settings.habits || []).filter(h => h.id !== id) }); },
     gymPatch: (patch, msg) => act.patchSettings({ gym: { ...(settings.gym || {}), ...patch } }, msg),
-    gymFinish: (key, rec, label) => { // v23: log a workout, keep 2 years
+    gymFinish: (key, rec, label, prs) => { // v24: log a workout (keep 2 years), celebrate personal records
       const g = settings.gym || {}, log = { ...(g.log || {}), [key]: rec };
       const cut = ymd(addDays(today, -730)); Object.keys(log).forEach(k => { if (k < cut) delete log[k]; });
       act.patchSettings({ gym: { ...g, log } });
       Sound.win(); buzz([30, 50, 30]);
-      const n = gymMonthCount(log, today);
-      setParty({ x: innerWidth / 2, y: innerHeight / 2, kicker: "WORKOUT DONE", line1: String(label || "Training").toUpperCase(), line2: "LOGGED.", text: `${n} workout${n === 1 ? "" : "s"} this month. Eat well tonight: protein and rice.` });
+      const n = gymMonthCount(log, today), pr = prs || [];
+      setParty({ x: innerWidth / 2, y: innerHeight / 2, kicker: pr.length ? "NEW PERSONAL RECORD" : "WORKOUT DONE", line1: String(label || "Training").toUpperCase(), line2: pr.length ? `${pr.length} PR${pr.length > 1 ? "S" : ""}!` : "LOGGED.",
+        text: pr.length ? `${pr.slice(0, 3).join(" · ")}. ${n} workout${n === 1 ? "" : "s"} this month.` : `${n} workout${n === 1 ? "" : "s"} this month. Eat well tonight: protein and rice.` });
     },
     saveReport: (key, snap) => { // freeze a finished month's result (quietly)
       const merged = { ...settings, reports: { ...(settings.reports || {}), [key]: snap } };
