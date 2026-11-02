@@ -1,4 +1,4 @@
-/* Ascent v2 · personal life roadmap app
+/* Ascent v2 · personal life roadmap app (build v23: Gym tab)
    Data lives in Supabase; only the owner's account can read or write it. */
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from "react";
 import { createRoot } from "react-dom/client";
@@ -361,7 +361,7 @@ function Urge({ left, streak, beaten, onClose, onBeaten, onTalk }) {
   const [phase, setPhase] = useState("in");
   useEffect(() => { const t = setInterval(() => setSecs(s => Math.max(0, s - 1)), 1000); return () => clearInterval(t); }, []);
   useEffect(() => { const t = setInterval(() => setPhase(p => p === "in" ? "out" : "in"), 4000); return () => clearInterval(t); }, []);
-  useEffect(() => { buzz(20); }, []);
+  useEffect(() => { buzz(20); Music.duck(true); return () => Music.duck(false); }, []); // quiet while you ride it out
   const mm = String(Math.floor(secs / 60)).padStart(2, "0"), ss = String(secs % 60).padStart(2, "0");
   return (
     <div className="urge" role="dialog" aria-label="Ride out the urge">
@@ -511,7 +511,7 @@ function DebtDetail({ entity, rows, today, onClose, act }) {
           return (
             <div key={r.id} className={"pay" + (r.is_cleared ? " done" : "") + (!r.is_cleared && dt < today ? " late" : "")}>
               <button className="ck2" aria-label={r.is_cleared ? "Mark unpaid" : "Mark paid"} onClick={() => act.toggleRow(r)}>{r.is_cleared ? <Tick /> : null}</button>
-              <span className="pd">{dayLabel(dt)}{r.note ? <em> · {r.note}</em> : null}{r.is_cleared && r.paid_on ? <em> · paid {dayLabel(parseDate(r.paid_on))}</em> : null}</span>
+              <span className="pd">{dayLabel(dt)}{r.note ? <em> · {r.note}</em> : null}{r.is_cleared && r.paid_on ? <em> · paid {dayLabel(parseDate(r.paid_on))}</em> : null}{r.is_cleared && r.proof_status ? <button className="linkbtn proof-link" onClick={() => act.viewProof(r)}>{PROOF_LABEL[r.proof_status]}</button> : null}</span>
               {edit && edit.id === r.id
                 ? <span className="pe"><input className="field mini" inputMode="decimal" value={edit.amt} onChange={e => setEdit({ ...edit, amt: e.target.value })} aria-label="Amount" /><input className="field mini" type="date" value={edit.date} onChange={e => setEdit({ ...edit, date: e.target.value })} aria-label="Due date" /><button className="chip-btn solid2" onClick={() => { const a = num(edit.amt); if (a > 0 && edit.date) { act.editRow(r, a, edit.date); setEdit(null); } }}>Save</button></span>
                 : <button className="pa num" onClick={() => setEdit({ id: r.id, amt: String(r.amount_due), date: ymd(dt) })}>{fmt(r.amount_due, 2)}</button>}
@@ -647,7 +647,7 @@ function PaydaySheet({ amount, rows, act, nextDate, settings, pots, onClose, onC
   const [save, setSave] = useState(String(Math.max(0, leftover))); const [potId, setPotId] = useState(firstOpen ? firstOpen.id : "");
   useEffect(() => { setSave(String(Math.max(0, leftover))); }, [living, fun, bills]);
   const s = num(save) || 0, rest = r2(leftover - s);
-  const markPaid = r => { act.toggleRow(r, null, true); setPaid(x => [...x, r.id]); };
+  const markPaid = async r => { if (await act.toggleRow(r, null, true)) setPaid(x => [...x, r.id]); };
   return (
     <Sheet title={`Payday · +${fmt(amount, 2)}`} hint="Give every dollar a job before it disappears." onClose={onClose} wide>
       {late.length > 0 && <div className="pay-late">
@@ -722,7 +722,7 @@ function SettingsSheet({ settings, state, onClose, act, onExport, telegramTest }
       </div>
       <div className="box">
         <div className="caps mute">Telegram reminders</div>
-        <p className="mute small">One message at 8pm when something is coming up: bills, payday, dated to-dos and milestones. Set up with TELEGRAM-GUIDE.md.</p>
+        <p className="mute small">One short message at 8pm when something is due tomorrow: bills, payday and to-dos, plus one line if anything is overdue. Set up with TELEGRAM-GUIDE.md.</p>
         <button className="chip-btn" onClick={async () => { setTg("Sending…"); setTg(await telegramTest()); }}>Send a test message</button> <span className="mute small">{tg}</span>
       </div>
       <LockSettings />
@@ -823,6 +823,139 @@ function DueDaysSheet({ ents, onClose, act }) {
     </Sheet>
   );
 }
+/* ---------------- proof of payment ---------------- */
+const PROOF_BUCKET = "receipts";
+const PROOF_LABEL = { ok: "Checked", mismatch: "Check this", unchecked: "Not checked", none: "No receipt" };
+
+async function shrinkImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const k = Math.min(1, 1800 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas"); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+    let q = .82, blob = null;
+    do { blob = await new Promise(r => c.toBlob(r, "image/jpeg", q)); q -= .12; } while (blob && blob.size > 900000 && q > .3);
+    return blob;
+  } catch (e) {
+    return /^image\/(jpeg|png|webp)$/.test(file.type) && file.size < 3000000 ? file : null;
+  } finally { URL.revokeObjectURL(url); }
+}
+const proofRemove = path => { if (path && sb && navigator.onLine) sb.storage.from(PROOF_BUCKET).remove([path]).catch(() => {}); };
+async function proofCheck(path, expect) {
+  try {
+    const { data, error } = await sb.functions.invoke("claude", { body: { verify: { path, expect } } });
+    if (error || !data) return { status: "unchecked", reason: "Claude couldn't be reached, so it wasn't checked." };
+    if (data.error) return { status: "unchecked", reason: String(data.error).slice(0, 140) };
+    return data;
+  } catch (e) { return { status: "unchecked", reason: "Claude couldn't be reached, so it wasn't checked." }; }
+}
+const verdictToStatus = s => s === "match" ? "ok" : s === "unchecked" ? "unchecked" : "mismatch";
+const ProofTag = ({ s }) => s ? <span className={"proof-tag p-" + s}>{s === "ok" ? "✓ " : s === "mismatch" ? "! " : ""}{PROOF_LABEL[s] || s}</span> : null;
+
+/* asks for a screenshot before a payment is marked paid. onDone(proofPatch | null) */
+function ProofSheet({ req, aiState, onDone }) {
+  const [step, setStep] = useState(navigator.onLine ? "pick" : "offline");
+  const [preview, setPreview] = useState(""); const [path, setPath] = useState("");
+  const [v, setV] = useState(null); const [msg, setMsg] = useState(""); const [why, setWhy] = useState("");
+  const pathRef = useRef(""); const doneRef = useRef(false);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+  const finish = p => { doneRef.current = true; onDone(p); };
+  const cancel = () => { if (!doneRef.current) { proofRemove(pathRef.current); finish(null); } };
+  const expect = { payee: req.payee, amount: req.amount, due: req.due ? ymd(req.due) : "", kind: req.kind || "", note: req.note || "" };
+  const pick = async e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return;
+    if (!navigator.onLine) { setStep("offline"); return; }
+    proofRemove(pathRef.current); pathRef.current = ""; setPath(""); setV(null);
+    setStep("busy"); setMsg("Preparing the screenshot…");
+    const blob = await shrinkImage(f);
+    if (!blob) { setStep("pick"); setMsg("That file isn't a picture I can read. Try a screenshot (JPG or PNG)."); return; }
+    setPreview(URL.createObjectURL(blob));
+    const p = (req.key || uid()).replace(/[^\w-]/g, "") + "/" + Date.now() + ".jpg";
+    setMsg("Uploading…");
+    const { error } = await sb.storage.from(PROOF_BUCKET).upload(p, blob, { contentType: "image/jpeg", upsert: true });
+    if (error) { setStep("pick"); setMsg("Upload failed: " + (error.message || "check your signal") + (/bucket|not found|policy/i.test(error.message || "") ? ". Run receipts-setup.sql in Supabase first." : ".")); return; }
+    pathRef.current = p; setPath(p);
+    if (aiState === "off" || aiState === "nokey") { setV({ status: "unchecked", reason: "Claude isn't set up yet, so this wasn't checked. Your screenshot is saved." }); setStep("result"); return; }
+    setMsg("Claude is checking it…");
+    const r = await proofCheck(p, expect);
+    setV(r); setStep("result");
+  };
+  const confirm = () => finish({ proof_path: path, proof_status: verdictToStatus(v.status), proof_note: (v.reason || "").slice(0, 200), proof_at: new Date().toISOString() });
+  const st = v ? verdictToStatus(v.status) : "";
+  return (
+    <div className="proof-layer"><Sheet title="Proof of payment" onClose={cancel}>
+      <div className="proof-bill"><span>{req.payee}{req.kind ? <em className="mute"> · {req.kind}</em> : null}</span><b className="num">{fmt(req.amount, 2)}</b></div>
+      {req.note ? <p className="mute small">{req.note}</p> : null}
+      {step === "offline" && <p className="note-new">Proof needs signal to upload. Connect, then tick it again. If there's no receipt at all, use "No receipt" below.</p>}
+      {step === "pick" && <>
+        <p className="hint">Add a screenshot of the payment: your bank app, PayNow, or the card or merchant receipt. {aiState === "ready" ? "Claude checks the amount, date and payee." : "It's saved with the bill."}</p>
+        <label className="solid proof-pick">Add screenshot<input type="file" accept="image/*" onChange={pick} hidden /></label>
+        {msg && <p className="note-new">{msg}</p>}
+      </>}
+      {(step === "busy" || step === "result") && preview && <div className="proof-img"><img src={preview} alt="Payment screenshot" /></div>}
+      {step === "busy" && <p className="proof-busy" role="status">{msg}</p>}
+      {step === "result" && v && <>
+        <div className={"proof-verdict p-" + st} role="status"><ProofTag s={st} /> <span>{v.reason || (st === "ok" ? "It matches." : "")}</span></div>
+        {st === "ok" && <button className="solid" onClick={confirm}>Mark paid</button>}
+        {st === "unchecked" && <><button className="solid" onClick={confirm}>Mark paid</button><p className="mute small">You can re-check it later in ☰ → Receipts.</p></>}
+        {st === "mismatch" && <div className="menu-row">
+          <label className="chip-btn solid2 proof-pick">Choose another<input type="file" accept="image/*" onChange={pick} hidden /></label>
+          <button className="chip-btn danger" onClick={confirm}>Mark paid anyway</button>
+        </div>}
+      </>}
+      {step !== "noreceipt" && step !== "busy" && <button className="linkbtn proof-skip" onClick={() => setStep("noreceipt")}>No receipt?</button>}
+      {step === "noreceipt" && <div className="box">
+        <Field id="pw" label="Why is there no receipt? (required)" value={why} onChange={e => setWhy(e.target.value)} placeholder="e.g. Paid cash to Izzat" autoFocus />
+        <div className="menu-row">
+          <button className="chip-btn danger" disabled={why.trim().length < 4} onClick={() => { proofRemove(pathRef.current); finish({ proof_path: null, proof_status: "none", proof_note: why.trim().slice(0, 200), proof_at: new Date().toISOString() }); }}>Mark paid without proof</button>
+          <button className="chip-btn" onClick={() => setStep(path ? "result" : navigator.onLine ? "pick" : "offline")}>Back</button>
+        </div>
+      </div>}
+    </Sheet></div>
+  );
+}
+
+/* view one receipt */
+function ProofView({ row, aiState, onClose, onRecheck }) {
+  const [url, setUrl] = useState(""); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!row.proof_path) return;
+    sb.storage.from(PROOF_BUCKET).createSignedUrl(row.proof_path, 600).then(({ data, error }) => error ? setErr("Couldn't open it: " + error.message) : setUrl(data.signedUrl)).catch(() => setErr("Couldn't open it. Check your signal."));
+  }, [row.proof_path]);
+  const recheck = async () => { setBusy(true); await onRecheck(row); setBusy(false); };
+  return (
+    <div className="proof-layer"><Sheet title="Receipt" onClose={onClose}>
+      <div className="proof-bill"><span>{row.entity_name}<em className="mute"> · {dayLabel(rowDate(row))}</em></span><b className="num">{fmt(row.amount_due, 2)}</b></div>
+      <div className={"proof-verdict p-" + (row.proof_status || "x")}><ProofTag s={row.proof_status} /> <span>{row.proof_status ? row.proof_note || "" : "Paid before proof was required."}</span></div>
+      {row.proof_path ? (url ? <div className="proof-img tall"><img src={url} alt={"Receipt for " + row.entity_name} /></div> : <p className="proof-busy">{err || "Loading…"}</p>) : null}
+      {row.proof_path && row.proof_status !== "ok" && aiState !== "off" && aiState !== "nokey" && <button className="solid" disabled={busy} onClick={recheck}>{busy ? "Claude is checking…" : "Re-check with Claude"}</button>}
+    </Sheet></div>
+  );
+}
+
+/* every paid bill with its proof */
+function ReceiptsSheet({ sched, onClose, onOpen }) {
+  const [f, setF] = useState("all");
+  const paid = sched.filter(r => isOblig(r) && r.is_cleared).sort((a, b) => String(b.proof_at || b.paid_on || "").localeCompare(String(a.proof_at || a.paid_on || "")));
+  const n = s => paid.filter(r => r.proof_status === s).length;
+  const shown = paid.filter(r => f === "all" ? true : f === "check" ? r.proof_status === "mismatch" || r.proof_status === "unchecked" : f === "none" ? r.proof_status === "none" : r.proof_status === "ok");
+  return (
+    <Sheet title="Receipts" hint="Every bill you've marked paid, with its proof. Tap one to see the screenshot." onClose={onClose} wide>
+      <div className="menu-row">
+        {[["all", "All", paid.length], ["ok", "Checked", n("ok")], ["check", "Check these", n("mismatch") + n("unchecked")], ["none", "No receipt", n("none")]].map(([k, l, c]) =>
+          <button key={k} className={"chip-btn" + (f === k ? " solid2" : "")} aria-pressed={f === k} onClick={() => setF(k)}>{l} ({c})</button>)}
+      </div>
+      <div className="recent proof-list">
+        {shown.length === 0 && <div className="empty">Nothing here yet.</div>}
+        {shown.slice(0, 120).map(r => <div key={r.id}>
+          <button className="rowbtn" onClick={() => onOpen(r)}>{dayLabel(parseDate(r.paid_on || ymd(rowDate(r))))} · {r.entity_name}</button>
+          <span className="proof-meta"><span className="num">{fmt(r.amount_due, 2)}</span>{r.proof_status ? <ProofTag s={r.proof_status} /> : <span className="mute small">before proof</span>}</span>
+        </div>)}
+      </div>
+    </Sheet>
+  );
+}
 
 /* ================= Bills · Parents · Habits (v15) ================= */
 /* Bills and money-to-parents are monthly rows in cashflow_schedule (category "Bill" / "Parents").
@@ -846,7 +979,7 @@ function recurringRowsNeeded(sched, settings, today) {
 }
 const BILL_IDEAS = [["Phone top-up", 15], ["SAFRA", 10], ["Spotify", 11], ["Insurance", 30], ["Gym", 20], ["iCloud", 1.3]];
 
-/* ---------- Money → Bills ---------- */
+/* ---------- Money → Debts → Bills ---------- */
 function BillsSection({ d, settings, today, act, setSheet }) {
   const key = ym(today);
   const bills = settings.bills || [];
@@ -893,7 +1026,7 @@ function BillSheet({ bill, bills, today, onClose, act }) {
   );
 }
 
-/* ---------- Money → Parents ---------- */
+/* ---------- Money → Savings → Mum &amp; Dad ---------- */
 function ParentsSection({ d, settings, today, act, setSheet }) {
   const p = { ...PARENTS_DEFAULT, ...(settings.parents || {}) };
   const rows = d.sched.filter(r => r.category === "Parents").sort((a, b) => rowDate(a) - rowDate(b));
@@ -938,7 +1071,7 @@ function ParentsPlanSheet({ settings, onClose, act }) {
   );
 }
 
-/* ---------- Life → Habits ---------- */
+/* ---------- Life → Streak → Habits ---------- */
 const HABIT_IDEAS = ["Solat 5 times", "Exercise 20 min", "No trading apps", "Read Quran", "Study 30 min", "Sleep before 12"];
 const habitStreak = (h, log, today) => {
   let n = 0, dt = new Date(today);
@@ -992,7 +1125,7 @@ function habitScore(settings, key, today) {
   return can ? { did, can } : null;
 }
 
-/* ---------- Life → Rewards (earn it, cash only; redeeming takes money from the Rewards/Car fund pot only) ---------- */
+/* ---------- Life → Family → Rewards (earn it, cash only; redeeming takes money from the Rewards/Car fund pot only) ---------- */
 const REWARD_POT = "Rewards", CAR_POT = "Car fund";
 const REWARDS_NS = [
   { id: "t-bmt", name: "BMT pass-out", gift: "A nice meal out", max: 30, when: "Jan 2027", need: c => [["BMT pass-out milestone ticked", c.ms(/^BMT passed out/i)]] },
@@ -1056,6 +1189,10 @@ function RewardsSection({ d, calc, settings, today, setSheet }) {
   const next = REWARDS_BIG.find(r => !c.got[r.id]);
   const nextCost = next && next.pot === REWARD_POT ? next.cost : 0;
   const n = Object.values(c.got).filter(g => !g.skipped).length;
+  const [all, setAll] = useState(false);
+  // v21: show what matters now (ready, plus the next one in each list); the rest folds away
+  const pick = list => { if (all) return list; const nx = list.find(r => { const st = rewardState(r, c).state; return st === "locked" || st === "ready"; }); return list.filter(r => rewardState(r, c).state === "ready" || r === nx); };
+  const hidden = REWARDS_NS.length + REWARDS_BIG.length - pick(REWARDS_NS).length - pick(REWARDS_BIG).length;
   return (
     <section className="block wrap" id="rewards">
       <div className="sechead"><Scramble text="REWARDS" /><span className="idx">earn it · cash only<br />{n} redeemed</span></div>
@@ -1068,9 +1205,10 @@ function RewardsSection({ d, calc, settings, today, setSheet }) {
         <p className="mute small">{pot ? "" : "The Rewards pot fills from your first salary. "}5% of take-home from your first job, 10% after your degree. Redeeming takes money out of the Rewards pot only: Buffer, Emergency, investing, degree and Mum &amp; Dad stay untouched.</p>
       </div>
       <div className="rw-h reveal">During NS · from guilt-free money</div>
-      <div className="rw-grid reveal">{REWARDS_NS.map(r => <RewardCard key={r.id} r={r} st={rewardState(r, c)} setSheet={setSheet} />)}</div>
+      <div className="rw-grid reveal">{pick(REWARDS_NS).map(r => <RewardCard key={r.id} r={r} st={rewardState(r, c)} setSheet={setSheet} />)}</div>
       <div className="rw-h reveal">The ladder · from the Rewards pot</div>
-      <div className="rw-grid reveal">{REWARDS_BIG.map(r => <RewardCard key={r.id} r={r} st={rewardState(r, c)} setSheet={setSheet} />)}</div>
+      <div className="rw-grid reveal">{pick(REWARDS_BIG).map(r => <RewardCard key={r.id} r={r} st={rewardState(r, c)} setSheet={setSheet} />)}</div>
+      {(all || hidden > 0) && <div className="minis reveal"><button className="chip-btn" aria-expanded={all} onClick={() => setAll(!all)}>{all ? "Show less" : `Show all rewards (${hidden} more)`}</button></div>}
       <p className="mute small reveal" style={{ marginTop: 12 }}>Cash only. No BNPL, no instalments, no phone contracts. A reward opens only when its milestone is done and the money is already in the pot. Your licence and Umrah with Mum &amp; Dad are goals, not prizes: they live in Journey and Family.</p>
     </section>
   );
@@ -1096,20 +1234,21 @@ function RewardSheet({ r, st, skip, onClose, act }) {
 /* ---------------- Guide: next steps + how-to (works without AI) ---------------- */
 const HOWTO = [
   { q: "Get around the app", k: "worlds tabs money invest career life menu navigate switch carousel", a: ["Main menu: swipe (or ◀ ▶) between Money, Invest, Career and Life, then tap to enter.", "Inside, the tabs along the top (or L1 / R1) switch pages. B goes back.", "☰ opens the pause menu: Settings, Backup, Sign out."], go: null },
-  { q: "Mark a bill as paid", k: "pay paid tick bill installment done", a: ["Money → Week: tick the bill. Your cash goes down by that amount.", "Wrong tap? Press Undo within 7 seconds.", "Paying one early? Money → Debts → tap the debt → tick that payment."], go: "scroll:week", btn: "Go to Week" },
+  { q: "Mark a bill as paid", k: "pay paid tick bill installment done", a: ["Money → Week: tick the bill, then add the payment screenshot (Proof of payment). Your cash goes down by that amount.", "Wrong tap? Press Undo within 7 seconds.", "Paying one early? Money → Debts → tap the debt → tick that payment."], go: "scroll:week", btn: "Go to Week" },
   { q: "Payday: when the allowance lands", k: "payday allowance salary arrive split budget", a: ["Money → Week: tick 'Allowance arrives'.", "The Payday screen opens. If it lists bills you already paid, tap Paid ✓ on each.", "Check living money, guilt-free money and the pot, then Confirm. Only the savings amount moves."], go: "scroll:week", btn: "Go to Week" },
-  { q: "Log what I spent", k: "spend spent log food transport smokes guilt free money", a: ["Tap + Spend (top bar), type the amount, pick a category.", "Treats go under Guilt-free: they don't eat your $200 living budget.", "Wrong entry? Money → Spend → tap it to edit or delete."], go: "spend", btn: "Log spending" },
+  { q: "Log what I spent", k: "spend spent log food transport smokes guilt free money", a: ["Tap + Spend (top bar), type the amount, pick a category.", "Treats go under Guilt-free: they don't eat your $200 living budget.", "Wrong entry? Money → History → tap it to edit or delete."], go: "spend", btn: "Log spending" },
   { q: "Update how much cash I have", k: "cash bank balance update safe", a: ["Check your bank app.", "Money → Week → Update cash, type the balance, Save.", "Once a week is enough; ticks and spending keep it in sync in between."], go: "cash", btn: "Update cash" },
+  { q: "Proof of payment and receipts", k: "proof receipt screenshot verify check paid photo bank paynow", a: ["Tick a bill → Proof of payment opens. Add a screenshot from your bank app, PayNow or the receipt.", "Claude checks amount, date and payee: Checked, Check this, or Not checked (when Claude isn't set up yet). Only then is it marked paid.", "No screenshot? Tap No receipt and write why. ☰ → Receipts shows every proof; tap one to view or re-check."], go: "receipts", btn: "Open Receipts" },
   { q: "What does 'Safe to spend' mean?", k: "safe to spend meaning per day short", a: ["Your cash minus every bill due before your next payday.", "What you can spend without missing a bill; the per-day figure spreads it until payday.", "Red means you're short: line up cover before the bill date. Never PayLater."], go: "scroll:week", btn: "Go to Week" },
   { q: "Add a debt, or change a payment", k: "add debt new bnpl paylater loan edit change amount date wrong payment", a: ["Money → Debts → + Add a debt (name, type, monthly amount, payments left, next date).", "To change one payment: tap the debt, tap the amount, change it, Save.", "Many dates at once: Money → Debts → Due dates."], go: "scroll:debts", btn: "Go to Debts" },
   { q: "Pay extra, or pay a debt off early", k: "extra early pay off lump sum finish sooner", a: ["Money → Debts → tap the debt.", "Pay extra comes off the last payments, so it ends sooner.", "Pay off now marks everything left as paid today."], go: "scroll:debts", btn: "Go to Debts" },
   { q: "Change my allowance, or add extra money", k: "income allowance change rank ang bao part time extra money", a: ["Money → Debts → Income.", "Allowance: new amount, pay day and the month it starts.", "One-off money (ang bao, part-time): name + amount, added to your cash."], go: "income", btn: "Open Income" },
-  { q: "Savings pots", k: "pot savings buffer emergency save take out withdraw new create", a: ["Money → Pots. Pots are labels: keep the real money in one savings account, separate from your card.", "Tap a pot to add money, or take some out with a reason.", "+ New pot for a new goal."], go: "scroll:pots", btn: "Go to Pots" },
-  { q: "Monthly bills and Mum & Dad", k: "bills recurring subscription parents mum dad give", a: ["Money → Bills: add regular non-debt bills (insurance, subscriptions).", "Money → Parents: $50 a month from Sep 2027. Give extra any time.", "Both count in Safe to spend and the Payday screen."], go: "scroll:bills", btn: "Go to Bills" },
-  { q: "To-dos and reminders", k: "task todo add edit delete reminder lock locked", a: ["Money → Week: type a to-do, add a date, Add.", "Dated to-dos unlock 7 days before they're due, and reach Telegram 30, 7 and 1 day before.", "Tap ⋯ to edit or delete. Done ones sit under 'Show done'."], go: "scroll:week", btn: "Go to Week" },
-  { q: "Telegram reminders", k: "telegram reminder bot notification 8pm izzat", a: ["One message at 8pm, only when something is coming up.", "Bills the night before (with the full bill for shared lines), a nudge to tell Izzat the day before Starhub and M1, payday savings, to-dos and milestones.", "Settings → Send a test message to check it."], go: "settings", btn: "Open Settings" },
+  { q: "Savings pots", k: "pot savings buffer emergency save take out withdraw new create", a: ["Money → Savings. Pots are labels: keep the real money in one savings account, separate from your card.", "Tap a pot to add money, or take some out with a reason.", "+ New pot for a new goal."], go: "scroll:pots", btn: "Go to Pots" },
+  { q: "Monthly bills and Mum & Dad", k: "bills recurring subscription parents mum dad give", a: ["Money → Debts → Bills: add regular non-debt bills (insurance, subscriptions).", "Money → Savings → Mum & Dad: $50 a month from Sep 2027. Give extra any time.", "Both count in Safe to spend and the Payday screen."], go: "scroll:bills", btn: "Go to Bills" },
+  { q: "To-dos and reminders", k: "task todo add edit delete reminder lock locked", a: ["Money → Week → To-dos → + Add a to-do: type it, add a date, Add.", "Week shows two lists: Bills & pay (money in and out) and To-dos (everything else, tagged Career, Invest or Life).", "Future to-dos sit under Show upcoming; career ones also live in Career → Path.", "Dated to-dos unlock 7 days before they're due, and Telegram reminds you the evening before.", "Ticked items fold away: paid bills under 'Show paid', finished to-dos under 'Show done'. Tap ⋯ to edit or delete."], go: "scroll:week", btn: "Go to Week" },
+  { q: "Telegram reminders", k: "telegram reminder bot notification 8pm izzat", a: ["One short message at 8pm, only when something is due tomorrow.", "It lists tomorrow's bills, payday and to-dos (with a nudge to ask Izzat for his half of Starhub and M1), plus one line if anything is overdue. Overdue to-dos are counted on Sundays only.", "Settings → Send a test message to check it."], go: "settings", btn: "Open Settings" },
   { q: "Milestones", k: "milestone goal achievement journey add tick", a: ["Life → Journey. Tap one and confirm to mark it done.", "Many tick themselves (loans cleared, pots full).", "+ Add a milestone for anything ahead."], go: "scroll:milestones", btn: "Go to Journey" },
-  { q: "Rewards", k: "reward redeem treat japan trip iphone grand seiko watch bmw m4 car ladder unlock", a: ["Life → Rewards.", "NS treats unlock with milestones and come from guilt-free money.", "After ORD the ladder is paid from the Rewards pot. When one is ready, Telegram tells you. Redeem takes money from that pot only."], go: "scroll:rewards", btn: "Open Rewards" },
+  { q: "Rewards", k: "reward redeem treat japan trip iphone grand seiko watch bmw m4 car ladder unlock", a: ["Life → Family → Rewards.", "NS treats unlock with milestones and come from guilt-free money.", "After ORD the ladder is paid from the Rewards pot. When one is ready, Telegram tells you. Redeem takes money from that pot only."], go: "scroll:rewards", btn: "Open Rewards" },
   { q: "Log a study session", k: "study network+ security+ comptia hours learn", a: ["Career → Study → Log a session → pick how long.", "Target and start date are in Settings."], go: "study", btn: "Log study" },
   { q: "I feel like trading", k: "trade trading urge gold xauusd deposit broker", a: ["Tap Urge? on the main menu, or Life → Streak → I feel like trading.", "Wait out the 10-minute timer. Breathe with the circle.", "Text your friend. NAMS: 6389 2200."], go: "urge", btn: "Open it now" },
   { q: "I slipped and traded", k: "slipped relapse traded lost reset streak", a: ["It happens. It isn't the end.", "Life → Streak → 'I slipped. Reset my streak.'", "Log any new debt honestly, then tell your friend. Tomorrow is day 1."], go: "scroll:streak", btn: "Go to Streak" },
@@ -1134,7 +1273,7 @@ function nextSteps(d, calc, settings, status) {
     const amt = Math.max(5, Math.floor(Math.min(calc.safe - 40, Number(buf.goal) - Number(buf.balance)) / 5) * 5);
     out.push({ t: `Move ${fmt(amt)} into your Buffer`, s: `${fmt(buf.balance)} of ${fmt(buf.goal)}. You can spare it and still cover bills.`, go: "pot:" + buf.id, btn: "Open Buffer" });
   }
-  rewardsReady(d, calc, settings, today).slice(0, 1).forEach(x => out.push({ t: `Reward ready: ${x.r.name}`, s: `${x.r.gift}. You earned it. Redeem it in Life → Rewards.`, go: "scroll:rewards", btn: "Open Rewards" }));
+  rewardsReady(d, calc, settings, today).slice(0, 1).forEach(x => out.push({ t: `Reward ready: ${x.r.name}`, s: `${x.r.gift}. You earned it. Redeem it in Life → Family → Rewards.`, go: "scroll:rewards", btn: "Open Rewards" }));
   const lastSpend = d.spend[0] ? parseDate(d.spend[0].spent_on) : null;
   if (!lastSpend || diffDays(today, lastSpend) >= 3) out.push({ t: "Log what you've spent", s: lastSpend ? `Nothing logged since ${dayLabel(lastSpend)}.` : "Nothing logged yet this month.", go: "spend", btn: "Log spending" });
   if (today >= parseDate(settings.studyStart) && calc.studyWeek < settings.studyTarget && [0, 6].includes(today.getDay())) out.push({ t: "Study session", s: `${(calc.studyWeek / 60).toFixed(1)} of ${settings.studyTarget / 60} h this week.`, go: "study", btn: "Log study" });
@@ -1296,7 +1435,8 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
           <div className="sechead"><Scramble text="CHECKLIST" /><span className="idx">before<br />opening day</span></div>
             <div className="budget reveal">
               {quests.map(q => <div key={q.t} className={"quest-line" + (q.ok ? " ok" : "")}><span className="qk">{q.ok ? "✓" : "·"}</span>{q.t}</div>)}
-              {todos.map(t => { const lk = taskLocked(t, today); return <button key={t.id} className={"quest-line todo-line" + (lk ? " locked" : "")} onClick={() => act.toggleTask(t)}><span className="qk">{lk ? "🔒" : "○"}</span>{t.title}{t.due_date ? " · " + dayLabel(parseDate(t.due_date)) : ""}{lk ? ` · unlocks ${dayYr(taskUnlock(t))}` : ""}</button>; })}
+              {todos.filter(t => !taskLocked(t, today)).map(t => <button key={t.id} className="quest-line todo-line" onClick={() => act.toggleTask(t)}><span className="qk">○</span>{t.title}{t.due_date ? " · " + dayLabel(parseDate(t.due_date)) : ""}</button>)}
+              {todos.some(t => taskLocked(t, today)) && <p className="mute small" style={{ marginTop: 8 }}>{todos.filter(t => taskLocked(t, today)).length} more to-dos open closer to their dates.</p>}
             </div>
         </section>
         <section className="block wrap" id="own">
@@ -1319,13 +1459,6 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
                 {on && <p className="small" style={{ margin: "4px 0 10px", lineHeight: 1.55 }}>{c.p}</p>}
               </details>); })}
           </div>
-        </section>
-        <section className="block wrap" id="badges">
-          <div className="sechead"><Scramble text="BADGES" /><span className="idx">{BADGES.filter(b => b.ok(inv)).length} of {BADGES.length}</span></div>
-          <div className="badges reveal">{BADGES.map(b => <div key={b.t} className={"badge" + (b.ok(inv) ? " got" : "")}><span aria-hidden="true">{b.ok(inv) ? "✦" : "○"}</span>{b.t}</div>)}</div>
-          {inv.moves.length > 0 && <div className="recent reveal" style={{ marginTop: 18 }}>
-            {inv.moves.slice(0, 12).map(m => <div key={m.id}><span className="rowbtn">{dayLabel(new Date(m.created_at))} · {m.reason || "Planted"}</span><span className="num">+{money(Number(m.amount))}</span></div>)}
-          </div>}
         </section>
         <section className="block wrap" id="rules">
           <div className="sechead"><Scramble text="ORBIT RULES" /><span className="idx">investing,<br />not trading</span></div>
@@ -1356,6 +1489,13 @@ function InvestWorld({ d, calc, settings, today, act, setSheet, flash }) {
             {reviewMonth && <div className="minis"><button className="chip-btn" onClick={() => setSheet({ type: "invest-value" })}>Log this review's value</button></div>}
           </div>
         </section>
+        <section className="block wrap" id="badges">
+          <div className="sechead"><Scramble text="BADGES" /><span className="idx">{BADGES.filter(b => b.ok(inv)).length} of {BADGES.length}</span></div>
+          <div className="badges reveal">{BADGES.map(b => <div key={b.t} className={"badge" + (b.ok(inv) ? " got" : "")}><span aria-hidden="true">{b.ok(inv) ? "✦" : "○"}</span>{b.t}</div>)}</div>
+          {inv.moves.length > 0 && <div className="recent reveal" style={{ marginTop: 18 }}>
+            {inv.moves.slice(0, 12).map(m => <div key={m.id}><span className="rowbtn">{dayLabel(new Date(m.created_at))} · {m.reason || "Planted"}</span><span className="num">+{money(Number(m.amount))}</span></div>)}
+          </div>}
+        </section>
       </main>
     </>
   );
@@ -1383,6 +1523,8 @@ function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewT
   const examDays = exam ? diffDays(parseDate(exam.target_date), today) : null;
   const todos = d.tasks.filter(t => !t.done && areaOf(t) === "career").sort((a, b) => String(a.due_date || "9").localeCompare(String(b.due_date || "9")));
   const who = (ME.en || "wan").toLowerCase().split(" ")[0];
+  const [showLocked, setShowLocked] = useState(false);
+  const openTodos = todos.filter(t => !taskLocked(t, today)), lockedTodos = todos.filter(t => taskLocked(t, today));
   return (
     <>
       <main>
@@ -1407,19 +1549,21 @@ function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewT
         <section className="block wrap" id="path">
           <div className="sechead"><Scramble text="THE PATH" /><span className="idx">{path.filter(m => m.done).length} of {path.length}<br />checkpoints</span></div>
           <div className="reveal term-list">
-            {path.length === 0 && <div className="empty">No career checkpoints yet. Run career-update.sql, or add one in Life → Milestones.</div>}
+            {path.length === 0 && <div className="empty">No career checkpoints yet. Run career-update.sql, or add one in Life → Journey.</div>}
             {path.map(m => <div key={m.id} className={"tl" + (m.done ? " done" : nextP && nextP.id === m.id ? " next" : "")}><span className="tk">{m.done ? "[x]" : nextP && nextP.id === m.id ? "[>]" : "[ ]"}</span><span className="tt">{m.title}</span><span className="td">{m.target_label}</span></div>)}
           </div>
         </section>
         <section className="block wrap" id="todo">
-          <div className="sechead"><Scramble text="CAREER TO-DOS" /><span className="idx">reminded on Telegram<br />30 · 7 · 1 days before</span></div>
+          <div className="sechead"><Scramble text="TO-DOS" /><span className="idx">{openTodos.length} open now<br />{lockedTodos.length} upcoming</span></div>
           <div className="reveal">
             {!hasArea && <div className="empty">Run worlds-setup.sql in Supabase so new to-dos you add here stay in Career.</div>}
-            {todos.length === 0 && <div className="empty">Nothing open. Add the next thing below.</div>}
-            {todos.map(t => <div className="qwrap" key={t.id}>
-              {(() => { const lk = taskLocked(t, today); return <button className={"quest" + (lk ? " locked" : "")} aria-disabled={lk} onClick={() => act.toggleTask(t)}><span className="i">{lk ? "⛓" : ">"}</span><span><div className="t">{t.title}</div><div className="m">{t.due_date ? dayLabel(parseDate(t.due_date)) + " " + parseDate(t.due_date).getFullYear() : "Anytime"}{lk ? <em className="lk"> · unlocks {dayYr(taskUnlock(t))}</em> : null}</div></span><span className="a" /><span className="ck">{lk ? <span aria-hidden="true">🔒</span> : <Tick />}</span></button>; })()}
+            {openTodos.length === 0 && <div className="empty">{lockedTodos.length ? `Nothing to do right now. The next one opens ${dayYr(taskUnlock(lockedTodos[0]))}.` : "Nothing open. Add the next thing below."}</div>}
+            {openTodos.map(t => <div className="qwrap" key={t.id}>
+              <button className="quest" onClick={() => act.toggleTask(t)}><span className="i">&gt;</span><span><div className="t">{t.title}</div><div className="m">{t.due_date ? dayLabel(parseDate(t.due_date)) + " " + parseDate(t.due_date).getFullYear() : "Anytime"}</div></span><span className="a" /><span className="ck"><Tick /></span></button>
               <button className="qedit" aria-label={"More options for " + t.title} onClick={() => setSheet({ type: "task", task: t })}>⋯</button>
             </div>)}
+            {lockedTodos.length > 0 && <div className="minis"><button className="chip-btn" aria-expanded={showLocked} onClick={() => setShowLocked(!showLocked)}>{showLocked ? "Hide" : "Show"} upcoming ({lockedTodos.length})</button></div>}
+            {showLocked && <div className="recent">{lockedTodos.map(t => <div key={t.id}><button className="rowbtn" onClick={() => setSheet({ type: "task", task: t })}>🔒 {monthLabel(t.due_date.slice(0, 7))} · {t.title}</button><span className="mute small">opens {dayLabel(taskUnlock(t))}</span></div>)}</div>}
             <form className="addrow" onSubmit={e => { e.preventDefault(); const t = newTask.trim(); if (!t) return; act.addTask(t, newDue, hasArea ? "career" : undefined); setNewTask(""); setNewDue(""); }}>
               <input className="field" placeholder="Add a career to-do…" value={newTask} onChange={e => setNewTask(e.target.value)} aria-label="New career to-do" />
               <input className="field" type="date" value={newDue} onChange={e => setNewDue(e.target.value)} aria-label="Due date (optional)" />
@@ -1441,6 +1585,170 @@ function CareerWorld({ d, calc, settings, today, act, setSheet, newTask, setNewT
 
 /* ================= LIFE: Dawn ================= */
 const FAMILY_RX = /mum|dad|parent|hajj|travel|wedding|bto|renov|family/i;
+/* ================= Life → Gym (v23): weights + cardio, logged in settings.gym ================= */
+const GYM_EX = {
+  A: { name: "Weights A", items: [
+    { id: "bench", n: "Bench press", s: 3, r: "8–10" },
+    { id: "goblet", n: "Goblet squat", s: 3, r: "10–12" },
+    { id: "dbrow", n: "One-arm dumbbell row", s: 3, r: "10 each arm" },
+    { id: "ohp", n: "Dumbbell shoulder press", s: 3, r: "10" },
+    { id: "lat", n: "Lateral raise", s: 3, r: "12–15" },
+    { id: "pushup", n: "Push-ups", s: 2, r: "max", bw: true },
+  ] },
+  B: { name: "Weights B", items: [
+    { id: "rdl", n: "Barbell Romanian deadlift", s: 3, r: "8–10" },
+    { id: "dbbench", n: "Dumbbell bench press", s: 3, r: "10" },
+    { id: "bbrow", n: "Bent-over barbell row", s: 3, r: "8–10" },
+    { id: "split", n: "Dumbbell split squat", s: 3, r: "8 each leg" },
+    { id: "lat", n: "Lateral raise", s: 3, r: "12–15" },
+    { id: "situp", n: "Sit-ups", s: 2, r: "max", bw: true },
+  ] },
+};
+const GYM_CARDIO = {
+  I: { name: "Cardio: intervals", how: "5 min easy jog · 6 × (1 min fast + 90 s easy) · 5 min cool-down" },
+  E: { name: "Cardio: easy run", how: "3–4 km at a pace where you can still talk" },
+  S: { name: "15 min cardio", how: "Easy jog or skipping, after Weights B" },
+};
+const GYM_EX_NAME = Object.fromEntries(Object.values(GYM_EX).flatMap(w => w.items.map(x => [x.id, x.n])));
+const GYM_HEIGHT = 173.8;
+const GYM_IPPT_SEED = [{ d: "2026-10-07", su: 42, pu: 33, run: "11:42", pts: 73 }];
+const isoWeek = dt => { const t = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate())); const dn = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - dn); const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)); return Math.ceil(((t - y0) / 864e5 + 1) / 7); };
+/* what the plan says for a day. Book-out mode (until POP): Sat A, Sun B + 15 min cardio. Full week: A/B take turns each week. */
+function gymPlan(dt, mode) {
+  const dow = dt.getDay();
+  if (mode !== "full") return dow === 6 ? { w: "A" } : dow === 0 ? { w: "B", c: "S" } : { camp: true };
+  const odd = isoWeek(dt) % 2 === 1, x = odd ? "B" : "A", y = odd ? "A" : "B";
+  return ({ 1: { w: x }, 2: { c: "I" }, 3: { w: y }, 5: { c: "E" }, 6: { w: x } })[dow] || { rest: true };
+}
+const gymLabel = p => p.camp ? "In camp" : p.rest ? "Rest day" : [p.w && GYM_EX[p.w].name, p.c && GYM_CARDIO[p.c].name].filter(Boolean).join(" + ");
+const gymShort = p => p.camp ? "·" : p.rest ? "–" : (p.w || "") + (p.c ? (p.w ? "+" : "") + "C" : "");
+const gymMonthCount = (log, today) => Object.keys(log || {}).filter(k => k.startsWith(ym(today))).length;
+/* last logged sets for an exercise, before a date */
+function gymLast(log, exId, before) {
+  const k = Object.keys(log || {}).filter(x => x < before && log[x].sets && log[x].sets[exId] && log[x].sets[exId].length).sort().pop();
+  return k ? { d: k, sets: log[k].sets[exId] } : null;
+}
+const setTxt = (s, bw) => s.map(x => bw ? `${x.r}` : `${x.w}×${x.r}`).join(", ");
+
+/* small card on Money → Week: today's training, one tap to the Gym tab */
+function GymToday({ settings, today, onOpen }) {
+  const g = settings.gym || {}, p = gymPlan(today, g.mode || "bookout"), done = !!(g.log || {})[ymd(today)];
+  if (p.camp && !done) return null;
+  return (
+    <button className="gymtoday reveal" onClick={onOpen} aria-label={"Open the gym tab: " + (done ? "done today" : gymLabel(p))}>
+      <span className="caps mute">Today's training</span>
+      <b>{done ? "Done today ✓" : gymLabel(p)}</b>
+      <span className="go">{done ? "View" : p.rest ? "Plan" : "Start"} →</span>
+    </button>
+  );
+}
+
+function GymSection({ settings, today, act }) {
+  const g = settings.gym || {}, mode = g.mode || "bookout", log = g.log || {};
+  const t = ymd(today), plan = gymPlan(today, mode), entry = log[t];
+  const DKEY = "ascent-gym-draft-" + t;
+  const readDraft = () => { try { return JSON.parse(lsGet(DKEY, "null")); } catch (e) { return null; } };
+  const [draft, setDraftRaw] = useState(readDraft);
+  const [pick, setPick] = useState(null); // do a session on a camp / rest day
+  const [kg, setKg] = useState(""); const [ipptForm, setIpptForm] = useState(null);
+  const today_ = pick || ((plan.camp || plan.rest) ? null : plan);
+  const setDraft = v => { setDraftRaw(v); lsSet(DKEY, JSON.stringify(v)); };
+  const dr = draft || { sets: {}, cardio: { min: "", km: "" } };
+  const upd = (exId, i, f, v) => { const sets = { ...dr.sets }; const arr = (sets[exId] || []).slice(); arr[i] = { ...(arr[i] || { w: "", r: "" }), [f]: v }; sets[exId] = arr; setDraft({ ...dr, sets }); };
+  const updC = (f, v) => setDraft({ ...dr, cardio: { ...dr.cardio, [f]: v } });
+  const finish = () => {
+    const sets = {};
+    if (today_ && today_.w) GYM_EX[today_.w].items.forEach(x => { const s = (dr.sets[x.id] || []).filter(z => z && num(z.r) > 0).map(z => x.bw ? { r: num(z.r) } : { w: num(z.w) || 0, r: num(z.r) }); if (s.length) sets[x.id] = s; });
+    const cardio = today_ && today_.c ? { min: num(dr.cardio.min) || null, km: num(dr.cardio.km) || null } : null;
+    act.gymFinish(t, { k: [today_.w, today_.c].filter(Boolean).join("+"), sets, ...(cardio ? { cardio } : {}), at: new Date().toISOString() }, gymLabel(today_));
+    try { localStorage.removeItem(DKEY); } catch (e) {}
+    setDraftRaw(null); setPick(null);
+  };
+  /* this week, Mon → Sun */
+  const mon = addDays(today, -((today.getDay() + 6) % 7));
+  const week = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
+  const body = (g.body || []).slice().sort((a, b) => a.d < b.d ? -1 : 1), lastKg = body.length ? body[body.length - 1] : null;
+  const bmi = lastKg ? lastKg.kg / Math.pow((g.height || GYM_HEIGHT) / 100, 2) : null;
+  const ippt = (g.ippt || GYM_IPPT_SEED).slice().sort((a, b) => a.d < b.d ? -1 : 1), lastI = ippt[ippt.length - 1];
+  const photo0 = parseDate(g.photoStart || "2026-11-02"), photos = g.photos || [];
+  let nextPhoto = photo0; while (ymd(nextPhoto) <= (photos.slice().sort().pop() || "")) nextPhoto = new Date(nextPhoto.getFullYear(), nextPhoto.getMonth() + 1, photo0.getDate());
+  const best = {}; Object.values(log).forEach(e => Object.entries(e.sets || {}).forEach(([id, s]) => s.forEach(z => { if (z.w && (!best[id] || z.w > best[id].w || (z.w === best[id].w && z.r > best[id].r))) best[id] = z; })));
+  const monthN = gymMonthCount(log, today);
+  return (
+    <section className="block wrap" id="gym">
+      <div className="sechead"><Scramble text="GYM" /><span className="idx">{monthN} workout{monthN === 1 ? "" : "s"} this month<br />{mode === "full" ? "full week plan" : "book-out weekends"}</span></div>
+
+      <div className="gym-week reveal" aria-label="This week's plan">
+        {week.map(dt => { const k = ymd(dt), p = gymPlan(dt, mode), dn = !!log[k]; return (
+          <span key={k} className={(k === t ? "now " : "") + (dn ? "on" : "")} title={dayLabel(dt) + ": " + gymLabel(p)}>
+            <i>{DAYS[dt.getDay()].charAt(0)}</i><b>{dn ? "✓" : gymShort(p)}</b>
+          </span>); })}
+      </div>
+
+      <div className="safe reveal gym-today">
+        <div className="row"><span className="caps mute">Today · {dayLabel(today)}</span><span className="caps mute">{entry ? "logged" : ""}</span></div>
+        {entry ? <>
+          <div className="safe-v gym-t">Done ✓</div>
+          <div className="safe-sub">{gymLabel({ w: entry.k.split("+").find(x => GYM_EX[x]), c: entry.k.split("+").find(x => GYM_CARDIO[x]) })}{entry.cardio && entry.cardio.min ? ` · ${entry.cardio.min} min` : ""}{entry.cardio && entry.cardio.km ? ` · ${entry.cardio.km} km` : ""}. Eat well tonight: protein + rice.</div>
+        </> : !today_ ? <>
+          <div className="safe-v gym-t">{plan.camp ? "In camp" : "Rest day"}</div>
+          <div className="safe-sub">{plan.camp ? "BMT is your training this week. Eat every meal and sleep when you can." : "Rest is when muscle grows. Eat well, walk a little."}</div>
+          <div className="minis"><span className="mute small" style={{ alignSelf: "center" }}>Training anyway?</span>{[["A", { w: "A" }], ["B", { w: "B" }], ["Cardio", { c: "E" }]].map(([l, p]) => <button key={l} className="chip-btn" onClick={() => setPick(p)}>{l}</button>)}</div>
+        </> : <>
+          <div className="safe-v gym-t">{gymLabel(today_)}</div>
+          <div className="safe-sub">Warm up 5 min · rest 60–90 s between sets · don't go to failure on the bench alone.</div>
+          {today_.w && GYM_EX[today_.w].items.map(x => { const last = gymLast(log, x.id, t); return (
+            <div className="gym-ex" key={x.id}>
+              <div className="gym-exh"><b>{x.n}</b><span className="mute">{x.s} × {x.r}</span></div>
+              {last && <div className="mute small">Last: {setTxt(last.sets, x.bw)}</div>}
+              <div className="gym-sets">{Array.from({ length: x.s }, (_, i) => { const z = (dr.sets[x.id] || [])[i] || {}; return (
+                <div className="gym-set" key={i}>
+                  <span className="mute">S{i + 1}</span>
+                  {!x.bw && <input className="field mini" inputMode="decimal" placeholder="kg" aria-label={`${x.n} set ${i + 1} weight in kg`} value={z.w || ""} onChange={e => upd(x.id, i, "w", e.target.value)} />}
+                  <input className="field mini" inputMode="numeric" placeholder="reps" aria-label={`${x.n} set ${i + 1} reps`} value={z.r || ""} onChange={e => upd(x.id, i, "r", e.target.value)} />
+                </div>); })}</div>
+            </div>); })}
+          {today_.c && <div className="gym-ex">
+            <div className="gym-exh"><b>{GYM_CARDIO[today_.c].name}</b></div>
+            <div className="mute small">{GYM_CARDIO[today_.c].how}</div>
+            <div className="gym-sets">
+              <div className="gym-set"><span className="mute">Min</span><input className="field mini" inputMode="numeric" placeholder="min" aria-label="Cardio minutes" value={dr.cardio.min || ""} onChange={e => updC("min", e.target.value)} /></div>
+              <div className="gym-set"><span className="mute">Km</span><input className="field mini" inputMode="decimal" placeholder="km" aria-label="Cardio distance in km" value={dr.cardio.km || ""} onChange={e => updC("km", e.target.value)} /></div>
+            </div>
+          </div>}
+          <div className="minis"><button className="chip-btn solid2" onClick={finish}>Finish workout ✓</button>{pick && <button className="chip-btn" onClick={() => setPick(null)}>Cancel</button>}</div>
+        </>}
+      </div>
+
+      <div className="box reveal gym-prog">
+        <div className="caps mute">Body weight</div>
+        <div><b className="num">{lastKg ? lastKg.kg + " kg" : "Not logged yet"}</b>{bmi ? <span className="mute small"> · BMI {bmi.toFixed(1)} · target 55–58 kg</span> : <span className="mute small"> · target 55–58 kg</span>}</div>
+        <div className="addrow"><input className="field" inputMode="decimal" placeholder="Today's weight, kg" aria-label="Today's weight in kg" value={kg} onChange={e => setKg(e.target.value)} />
+          <button className="cta" disabled={!(num(kg) > 25 && num(kg) < 200)} onClick={() => { act.gymPatch({ body: [...(g.body || []).filter(b => b.d !== t), { d: t, kg: r2(num(kg)) }] }, "Weight saved"); setKg(""); }}>Save</button></div>
+        <div className="caps mute" style={{ marginTop: 8 }}>Progress photos</div>
+        <div className="small">Front, side, back · same spot and light. Next: <b>{dayLabel(nextPhoto)}</b>{photos.length ? ` · ${photos.length} done` : ""}</div>
+        <div className="minis"><button className="chip-btn" onClick={() => act.gymPatch({ photos: [...photos.filter(p => p !== t), t] }, "Photos logged")}>Took them today ✓</button></div>
+        <div className="caps mute" style={{ marginTop: 8 }}>IPPT</div>
+        <div className="small">Last: <b>{lastI.pts} pts</b> ({dayLabel(parseDate(lastI.d))}) · sit-ups {lastI.su} · push-ups {lastI.pu} · 2.4 km {lastI.run}{lastI.pts < 75 ? ` · Silver is ${75 - lastI.pts} away` : lastI.pts < 85 ? ` · Gold is ${85 - lastI.pts} away` : " · Gold ✓"}</div>
+        {ipptForm ? <div className="gym-sets" style={{ marginTop: 6 }}>
+          {[["su", "Sit-ups"], ["pu", "Push-ups"], ["run", "2.4 km (mm:ss)"], ["pts", "Points"]].map(([f, l]) => <div className="gym-set" key={f}><span className="mute">{l}</span><input className="field mini" inputMode={f === "run" ? "text" : "numeric"} aria-label={l} value={ipptForm[f]} onChange={e => setIpptForm({ ...ipptForm, [f]: e.target.value })} /></div>)}
+          <div className="minis"><button className="chip-btn solid2" disabled={!(num(ipptForm.pts) > 0)} onClick={() => { act.gymPatch({ ippt: [...ippt.filter(x => x.d !== t), { d: t, su: num(ipptForm.su) || 0, pu: num(ipptForm.pu) || 0, run: ipptForm.run || "", pts: num(ipptForm.pts) }] }, "IPPT saved"); setIpptForm(null); }}>Save result</button><button className="chip-btn" onClick={() => setIpptForm(null)}>Cancel</button></div>
+        </div> : <div className="minis"><button className="chip-btn" onClick={() => setIpptForm({ su: "", pu: "", run: "", pts: "" })}>+ Add IPPT result</button></div>}
+        {Object.keys(best).length > 0 && <>
+          <div className="caps mute" style={{ marginTop: 8 }}>Best lifts</div>
+          <div className="small">{Object.entries(best).map(([id, z]) => <div key={id}>{GYM_EX_NAME[id] || id}: <b>{z.w} kg × {z.r}</b></div>)}</div>
+        </>}
+      </div>
+
+      <div className="minis reveal">
+        <span className="mute small" style={{ alignSelf: "center" }}>Plan:</span>
+        {[["bookout", "Book-out weekends"], ["full", "Full week"]].map(([m, l]) => <button key={m} className={"cat" + (mode === m ? " on" : "")} aria-pressed={mode === m} onClick={() => mode !== m && act.gymPatch({ mode: m }, m === "full" ? "Full-week plan on" : "Weekend plan on")}>{l}</button>)}
+      </div>
+      <p className="mute small reveal" style={{ marginTop: 8 }}>{mode === "full" ? "Mon A · Tue intervals · Wed B · Thu rest · Fri easy run · Sat A · Sun rest. A and B swap each week." : "Until POP: Saturday Weights A, Sunday Weights B + 15 min cardio. Switch to Full week after POP."} Add 1–2 reps a week; when every set hits the top of the range, add a little weight.</p>
+    </section>
+  );
+}
+
 function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmReset, setConfirmReset, resetStreak, msAsk, setMsAsk }) {
   const since = parseDate(d.state.trading_free_since || ymd(today));
   const ordDays = Math.max(0, diffDays(parseDate(settings.ord), today));
@@ -1506,6 +1814,7 @@ function LifeWorld({ d, calc, settings, today, act, setSheet, setUrge, confirmRe
             <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "ms" })}>+ Add a milestone</button></div>
           </div>
         </section>
+        <GymSection settings={settings} today={today} act={act} />
       </main>
     </>
   );
@@ -1536,14 +1845,118 @@ Object.assign(Sound, {
 });
 const setSfx = on => { Sound.on = on; lsSet("ascent-sfx", on ? "on" : "off"); if (on) Sound.tick(); };
 
+/* ---------- soundtrack: original night-drive synthwave, composed in code (no files, no copyright, works offline) ---------- */
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+const SONGS = [
+  { name: "Night Run", bpm: 98, bars: 32, chords: [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]], roots: [45, 41, 36, 43],
+    bass: [0, 3, 6, 8, 10, 14], arp: "up16", kick: [0, 8, 11], snare: [4, 12], hat: [2, 6, 10, 14],
+    form: i => i < 4 ? "intro" : i < 20 ? "full" : i < 24 ? "break" : "full" },
+  { name: "Neon Rain", bpm: 84, bars: 24, chords: [[54, 57, 61], [50, 54, 57], [52, 57, 61], [52, 56, 59]], roots: [42, 38, 45, 40],
+    bass: [0, 7, 10], arp: "wave8", kick: [0, 10], snare: [8], hat: [2, 6, 10, 14, 15],
+    form: i => i < 4 ? "intro" : i < 14 ? "full" : i < 18 ? "break" : "full" },
+  { name: "Last Train Home", bpm: 90, bars: 24, chords: [[52, 55, 59], [48, 52, 55], [50, 53, 57], [47, 50, 55]], roots: [40, 36, 38, 43],
+    bass: [0, 4, 8, 11, 12], arp: "down16", kick: [0, 6, 8], snare: [4, 12], hat: [2, 6, 10, 14],
+    form: i => i < 2 ? "intro" : i < 12 ? "full" : i < 16 ? "break" : "full" },
+];
+const Music = {
+  on: lsGet("ascent-music", "off") === "on", vol: Math.min(1, Math.max(0, Number(lsGet("ascent-music-vol", "0.5")))), playing: false, ducked: false,
+  ctx: null, out: null, timer: null, song: 0, bar: 0, step: 0, next: 0,
+  init() {
+    if (this.out) return true;
+    try {
+      const c = this.ctx = Sound.ctx || (Sound.ctx = new (window.AudioContext || window.webkitAudioContext)());
+      const comp = c.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 3; comp.connect(c.destination);
+      this.out = c.createGain(); this.out.gain.value = 0; this.out.connect(comp);
+      const len = c.sampleRate * 2.4, ir = c.createBuffer(2, len, c.sampleRate);
+      for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+      this.verb = c.createConvolver(); this.verb.buffer = ir; const wet = c.createGain(); wet.gain.value = .32; this.verb.connect(wet).connect(this.out);
+      this.dly = c.createDelay(1); const fb = c.createGain(); fb.gain.value = .33; const dw = c.createGain(); dw.gain.value = .28;
+      this.dly.connect(fb).connect(this.dly); this.dly.connect(dw).connect(this.out);
+      const n = c.sampleRate, nb = c.createBuffer(1, n, c.sampleRate), nd = nb.getChannelData(0); for (let i = 0; i < n; i++) nd[i] = Math.random() * 2 - 1; this.noise = nb;
+      document.addEventListener("visibilitychange", () => { if (!this.ctx) return; if (document.hidden) this.ctx.suspend(); else if (this.playing) this.ctx.resume(); });
+      return true;
+    } catch (e) { return false; }
+  },
+  level() { return this.ducked ? 0 : this.vol * .9; },
+  start() {
+    if (!this.on || this.playing || !this.init()) return;
+    const c = this.ctx; if (c.state === "suspended") c.resume();
+    this.playing = true; this.bar = 0; this.step = 0; this.next = c.currentTime + .15;
+    this.out.gain.cancelScheduledValues(c.currentTime); this.out.gain.setValueAtTime(this.out.gain.value, c.currentTime); this.out.gain.linearRampToValueAtTime(this.level(), c.currentTime + 2.5);
+    clearInterval(this.timer); this.timer = setInterval(() => this.tick(), 25); this.toast();
+  },
+  stop() {
+    if (!this.playing) return; const c = this.ctx; this.playing = false;
+    this.out.gain.cancelScheduledValues(c.currentTime); this.out.gain.setValueAtTime(this.out.gain.value, c.currentTime); this.out.gain.linearRampToValueAtTime(0, c.currentTime + .6);
+    setTimeout(() => { if (!this.playing) clearInterval(this.timer); }, 700);
+  },
+  set(on) { this.on = on; lsSet("ascent-music", on ? "on" : "off"); if (on) this.start(); else this.stop(); },
+  setVol(v) { this.vol = v; lsSet("ascent-music-vol", String(v)); if (this.playing && this.out) this.out.gain.setTargetAtTime(this.level(), this.ctx.currentTime, .1); },
+  duck(d) { this.ducked = d; if (this.playing && this.out) this.out.gain.setTargetAtTime(this.level(), this.ctx.currentTime, .4); },
+  skip() { if (!this.playing) return; this.song = (this.song + 1) % SONGS.length; this.bar = 0; this.step = 0; this.toast(); },
+  toast() {
+    try { const el = document.createElement("div"); el.className = "ug-np"; el.innerHTML = `<span class="ug-np-k">♪ Now playing</span><b>${SONGS[this.song].name}</b><small>Ascent FM</small>`;
+      document.body.appendChild(el); setTimeout(() => el.classList.add("out"), 3400); setTimeout(() => el.remove(), 4200); } catch (e) {}
+  },
+  tick() {
+    const c = this.ctx; if (!this.playing || c.state !== "running") return;
+    while (this.next < c.currentTime + .12) {
+      const S = SONGS[this.song], dur16 = 60 / S.bpm / 4;
+      this.play(S, this.bar, this.step, this.next, dur16);
+      this.next += dur16 * (this.step % 2 ? .94 : 1.06); // a little swing
+      if (++this.step === 16) { this.step = 0; if (++this.bar >= S.bars) { this.bar = 0; this.song = (this.song + 1) % SONGS.length; this.toast(); } }
+    }
+  },
+  voice(type, f, t, len, vol, dest, cut = 2400, att = .005) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain(), fl = c.createBiquadFilter();
+    o.type = type; o.frequency.value = f; fl.type = "lowpass"; fl.frequency.setValueAtTime(cut, t); fl.frequency.exponentialRampToValueAtTime(Math.max(120, cut * .25), t + len);
+    g.gain.setValueAtTime(.0001, t); g.gain.linearRampToValueAtTime(vol, t + att); g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    o.connect(fl).connect(g); (Array.isArray(dest) ? dest : [dest]).forEach(x => g.connect(x)); o.start(t); o.stop(t + len + .05);
+  },
+  hit(t, len, vol, ftype, freq, q = 1) {
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noise; f.type = ftype; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + len); s.connect(f).connect(g).connect(this.out); g.connect(this.verb);
+    s.start(t, Math.random() * .5, len + .02);
+  },
+  play(S, bar, st, t, d16) {
+    const sec = S.form(bar), ci = bar % S.chords.length, ch = S.chords[ci], root = S.roots[ci], barLen = d16 * 16;
+    if (st === 0) ch.forEach((m, i) => { // pad: two detuned saws per note, slow attack
+      [-7, 7].forEach(det => this.voice("sawtooth", mtof(m) * Math.pow(2, det / 1200), t, barLen * 1.05, .018, [this.out, this.verb], sec === "break" ? 1400 : 900, barLen * .35)); });
+    if (sec !== "intro" && S.bass.includes(st)) this.voice("sawtooth", mtof(root), t, d16 * 1.8, .09, this.out, 700);
+    if (sec !== "intro") { // arpeggio through the delay
+      const tones = [...ch, ch[0] + 12, ch[1] + 12], k = st % tones.length;
+      const on = S.arp === "wave8" ? st % 2 === 0 : true;
+      if (on) { const idx = S.arp === "down16" ? tones.length - 1 - k : S.arp === "wave8" ? [0, 1, 2, 3, 4, 3, 2, 1][(st / 2) % 8] : k;
+        this.voice(S.arp === "wave8" ? "triangle" : "square", mtof(tones[idx] + 12), t, d16 * 1.4, S.arp === "wave8" ? .05 : .026, [this.out, this.dly], 3200); }
+      this.dly.delayTime.setValueAtTime(d16 * 3, t);
+    }
+    if (sec === "full") {
+      if (S.kick.includes(st)) { const c = this.ctx, o = c.createOscillator(), g = c.createGain(); o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + .16);
+        g.gain.setValueAtTime(.55, t); g.gain.exponentialRampToValueAtTime(.0001, t + .32); o.connect(g).connect(this.out); o.start(t); o.stop(t + .35); }
+      if (S.snare.includes(st)) this.hit(t, .22, .22, "bandpass", 1800, .7);
+      if (S.hat.includes(st)) this.hit(t, st === 14 || st === 15 ? .12 : .04, .07, "highpass", 8000);
+    }
+    if (sec === "break" && st % 4 === 2) this.hit(t, .03, .035, "highpass", 9000);
+  },
+};
+// music can only start after a tap: start on the first tap if it's switched on
+["pointerdown", "keydown"].forEach(ev => addEventListener(ev, () => Music.start(), { once: true, passive: true }));
+function MusicBtn() {
+  const [on, setOn] = useState(Music.on);
+  return <button className="ug-icon" aria-label={on ? "Turn music off" : "Turn music on"} aria-pressed={on} onClick={() => { Music.set(!on); setOn(!on); }}><UGIcon k={on ? "music" : "music-off"} /></button>;
+}
+
 /* the four stages: what each carousel card and stage bar shows */
 const UG_TABS = {
-  money: [["week", "Week"], ["climb", "Climb"], ["debts", "Debts"], ["bills", "Bills"], ["spend", "Spend"], ["pots", "Pots"], ["parents", "Parents"], ["history", "History"]],
-  invest: [["grove", "This month"], ["checklist", "Checklist"], ["own", "Own"], ["learn", "Learn"], ["badges", "Badges"], ["rules", "Rules"], ["review", "Review"]],
-  career: [["study", "Study"], ["path", "Path"], ["todo", "To-dos"], ["employers", "Jobs"]],
-  life: [["streak", "Streak"], ["why", "Why"], ["habits", "Habits"], ["family", "Family"], ["rewards", "Rewards"], ["milestones", "Journey"]],
+  money: [["week", "Week"], ["debts", "Debts"], ["pots", "Savings"], ["history", "History"]],
+  invest: [["grove", "This month"], ["learn", "Learn"], ["rules", "Rules"]],
+  career: [["study", "Study"], ["path", "Path"], ["employers", "Jobs"]],
+  life: [["streak", "Streak"], ["gym", "Gym"], ["family", "Family"], ["milestones", "Journey"]],
 };
-const ugTabOf = id => (id === "ascent" || id === "top" ? "climb" : id === "streaks" ? "streak" : id);
+/* v21: many sections share one tab. Maps a section id (or an old tab id) to the tab that shows it. */
+const UG_TAB_OF = { ascent: "debts", top: "debts", climb: "debts", bills: "debts", parents: "pots", spend: "history", checklist: "grove", own: "learn", badges: "rules", review: "rules", todo: "path", streaks: "streak", why: "streak", habits: "streak", rewards: "family" };
+const ugTabOf = id => UG_TAB_OF[id] || id;
 const UG_IMG = id => `https://images.unsplash.com/photo-${id}?w=${innerWidth > 900 ? 900 : 640}&q=62&auto=format&fit=crop`;
 function ugCards(d, calc, settings, today) {
   const inv = investInfo(d, today);
@@ -1598,6 +2011,8 @@ function UGIcon({ k }) {
   const p = { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
   if (k === "snd") return <svg {...p}><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16 9a4 4 0 010 6" /></svg>;
   if (k === "mute") return <svg {...p}><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M17 9l5 6M22 9l-5 6" /></svg>;
+  if (k === "music") return <svg {...p}><path d="M9 18V5l11-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="17" cy="16" r="3" /></svg>;
+  if (k === "music-off") return <svg {...p}><path d="M9 18V5l11-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="17" cy="16" r="3" /><path d="M3 3l18 18" /></svg>;
   if (k === "out") return <svg {...p}><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" /></svg>;
   if (k === "menu") return <svg {...p}><path d="M4 7h16M4 12h16M4 17h10" /></svg>;
   return null;
@@ -1693,6 +2108,7 @@ function Hub({ d, calc, settings, today, world, onEnter, onSignOut, onUrge }) {
         <UGLogo small /><div className="ug-sp" />
         <div className="ug-clockw"><UGClock /></div>
         <button className="ug-pill ug-urge" onClick={onUrge}>Urge?</button>
+        <MusicBtn />
         <SfxBtn />
         <button className="ug-icon" aria-label="Sign out" onClick={onSignOut}><UGIcon k="out" /></button>
       </div>
@@ -1986,7 +2402,9 @@ function Main({ session, mode, setMode }) {
   const [loaded, setLoaded] = useState(!!quick.current || !(firstToday && MOTION !== "off"));
   const [menu, setMenu] = useState(false);
   const [sound, setSound] = useState(Sound.on);
+  const [music, setMusic] = useState(Music.on);
   const [sheet, setSheet] = useState(null);
+  const [proofReq, setProofReq] = useState(null); const [proofView, setProofView] = useState(null);
   const [party, setParty] = useState(null);
   const [toast, setToast] = useState("");
   const [undo, setUndo] = useState(null);
@@ -2007,7 +2425,7 @@ function Main({ session, mode, setMode }) {
   const [report, setReport] = useState(null); // "YYYY-MM" of the report card being shown
   const [tab, setTabRaw] = useState(() => lsGet("ascent-tab-" + world, ""));
   const tabs = UG_TABS[world] || UG_TABS.money;
-  const curTab = tabs.some(t => t[0] === tab) ? tab : tabs[0][0];
+  const curTab = tabs.some(t => t[0] === ugTabOf(tab)) ? ugTabOf(tab) : tabs[0][0];
   const pagesRef = useRef(null);
   const setTab = (id, quiet) => { if (id === curTab) return; if (!quiet) { Sound.move(); buzz(6); } const dir = tabs.findIndex(t => t[0] === id) > tabs.findIndex(t => t[0] === curTab) ? 1 : -1; if (pagesRef.current) { pagesRef.current.style.setProperty("--dir", dir); pagesRef.current.scrollTop = 0; } setTabRaw(id); lsSet("ascent-tab-" + world, id); };
   useEffect(() => { const el = pagesRef.current; if (!el || CALM) return; el.classList.remove("swap"); void el.offsetWidth; el.classList.add("swap"); }, [curTab, world, view]);
@@ -2061,7 +2479,7 @@ function Main({ session, mode, setMode }) {
     };
     addEventListener("popstate", pop); return () => removeEventListener("popstate", pop);
   }, []);
-  const [showDone, setShowDone] = useState(false); const [showLater, setShowLater] = useState(false);
+  const [showDone, setShowDone] = useState(false); const [showLater, setShowLater] = useState(false); const [showSoon, setShowSoon] = useState(false); const [showAdd, setShowAdd] = useState(false); const [showPaid, setShowPaid] = useState(false);
   const [msAsk, setMsAsk] = useState(null);
   const [histN, setHistN] = useState(6);
   const cashRef = useRef(null);
@@ -2283,13 +2701,24 @@ function Main({ session, mode, setMode }) {
   /* ----- actions ----- */
   const localRow = (id, patch) => setD(x => ({ ...x, sched: x.sched.map(r => r.id === id ? { ...r, ...patch } : r) }));
   const clearedParty = (name, total, x, y) => setTimeout(() => setParty({ x, y, kicker: "DEBT CLEARED · " + monthLabel(calc.monthKey), line1: name.toUpperCase(), line2: "GONE.", text: `${fmt(total, 2)} paid off. Remember this feeling.` }), 700);
+  const askProof = info => new Promise(res => setProofReq({ ...info, resolve: res }));
+  const NO_PROOF = { proof_path: null, proof_status: null, proof_note: null, proof_at: null };
+  const dropProof = (path, exceptIds) => { if (path && !d.sched.some(x => x.proof_path === path && !exceptIds.includes(x.id))) proofRemove(path); };
   const act = {
     toggleRow: async (r, ev, silent) => {
-      const next = !r.is_cleared, amt = Number(r.amount_due), patch = { is_cleared: next, paid_on: next ? ymd(today) : null };
+      const next = !r.is_cleared, amt = Number(r.amount_due);
+      let patch = { is_cleared: next, paid_on: next ? ymd(today) : null };
+      if (next && isOblig(r)) {
+        const p = await askProof({ key: r.id, payee: r.category === "Parents" ? "Give " + r.entity_name : r.entity_name, amount: amt, due: rowDate(r), kind: r.category === "Telco" ? "Phone line" : r.category === "Parents" ? "Transfer to parents" : r.category === "Bill" ? "Bill" : "Debt payment", note: r.note || "" });
+        if (!p) return false;
+        patch = { ...patch, ...p };
+      }
+      if (!next && isOblig(r)) { dropProof(r.proof_path, [r.id]); patch = { ...patch, ...NO_PROOF }; }
       localRow(r.id, patch);
       const delta = isOblig(r) ? (next ? -amt : amt) : (next ? amt : -amt);
       const ok = await commit([{ t: "update", table: "cashflow_schedule", patch, f: [["eq", "id", r.id]] }, ...cashOps(delta)]);
-      if (!ok || silent) return;
+      if (!ok) return false;
+      if (silent) return true;
       if (next) {
         Sound.check(); buzz(15);
         showUndo(isOblig(r) ? `${r.entity_name} ${fmt(amt, 2)} marked paid` : `+${fmt(amt, 2)} received`, () => act.toggleRow({ ...r, ...patch }, null, true));
@@ -2303,18 +2732,32 @@ function Main({ session, mode, setMode }) {
           setTimeout(() => setSheet({ type: "payday", amount: amt, rows: due, nextDate: after ? after._dt : null }), 500);
         }
       } else if (!silent) flash("Marked as not paid");
+      return true;
+    },
+    viewProof: r => setProofView(r),
+    recheckProof: async r => {
+      const v = await proofCheck(r.proof_path, { payee: r.entity_name, amount: Number(r.amount_due), due: ymd(rowDate(r)), kind: r.category, note: r.note || "" });
+      const patch = { proof_status: verdictToStatus(v.status), proof_note: (v.reason || "").slice(0, 200), proof_at: new Date().toISOString() };
+      localRow(r.id, patch); setProofView(x => x && x.id === r.id ? { ...x, ...patch } : x);
+      await commit([{ t: "update", table: "cashflow_schedule", patch, f: [["eq", "id", r.id]] }]);
     },
     payExtra: async (entity, x) => {
       const e = calc.ents[entity]; if (!e) return;
+      const xid = uid();
+      const p = await askProof({ key: xid, payee: entity, amount: x, due: today, kind: "Extra payment", note: "An extra payment on top of the schedule, made today or recently." });
+      if (!p) return;
       const unpaid = e.rows.filter(r => !r.is_cleared).slice().reverse();
-      const extraRow = { id: uid(), month_date: calc.monthKey + "-01", entity_name: entity, category: e.cat, amount_due: x, is_cleared: true, due_day: today.getDate(), paid_on: ymd(today), note: "Extra payment" };
+      const extraRow = { id: xid, month_date: calc.monthKey + "-01", entity_name: entity, category: e.cat, amount_due: x, is_cleared: true, due_day: today.getDate(), paid_on: ymd(today), note: "Extra payment", ...p };
       const ops = [{ t: "insert", table: "cashflow_schedule", row: extraRow }]; let rest = x; const dels = [], ups = {};
       for (const r of unpaid) { if (rest < .005) break; const a = Number(r.amount_due); if (a <= rest + .005) { dels.push(r.id); rest = r2(rest - a); ops.push({ t: "delete", table: "cashflow_schedule", f: [["eq", "id", r.id]] }); } else { ups[r.id] = r2(a - rest); ops.push({ t: "update", table: "cashflow_schedule", patch: { amount_due: r2(a - rest) }, f: [["eq", "id", r.id]] }); rest = 0; } }
       setD(s => ({ ...s, sched: [...s.sched.filter(r => !dels.includes(r.id)).map(r => ups[r.id] != null ? { ...r, amount_due: ups[r.id] } : r), extraRow] }));
       if (await commit([...ops, ...cashOps(-x)])) { Sound.check(); flash(`Extra ${fmt(x, 2)} recorded. ${entity} finishes sooner.`); if (x >= e.left - .005) clearedParty(entity, e.total, innerWidth / 2, innerHeight / 2); }
     },
     payOff: async entity => {
-      const e = calc.ents[entity]; if (!e) return; const ids = e.rows.filter(r => !r.is_cleared).map(r => r.id); const patch = { is_cleared: true, paid_on: ymd(today) };
+      const e = calc.ents[entity]; if (!e) return; const ids = e.rows.filter(r => !r.is_cleared).map(r => r.id);
+      const p = await askProof({ key: ids[0], payee: entity, amount: e.left, due: today, kind: "Paying off the whole balance", note: `Settles ${ids.length} remaining payment${ids.length > 1 ? "s" : ""} at once.` });
+      if (!p) return;
+      const patch = { is_cleared: true, paid_on: ymd(today), ...p };
       setD(s => ({ ...s, sched: s.sched.map(r => ids.includes(r.id) ? { ...r, ...patch } : r) }));
       if (await commit([...ids.map(id => ({ t: "update", table: "cashflow_schedule", patch, f: [["eq", "id", id]] })), ...cashOps(-e.left)])) clearedParty(entity, e.total, innerWidth / 2, innerHeight / 2);
     },
@@ -2470,6 +2913,15 @@ function Main({ session, mode, setMode }) {
     },
     addHabit: name => { act.patchSettings({ habits: [...(settings.habits || []), { id: uid(), name, since: ymd(today) }] }, `${name} added`); },
     removeHabit: id => { act.patchSettings({ habits: (settings.habits || []).filter(h => h.id !== id) }); },
+    gymPatch: (patch, msg) => act.patchSettings({ gym: { ...(settings.gym || {}), ...patch } }, msg),
+    gymFinish: (key, rec, label) => { // v23: log a workout, keep 2 years
+      const g = settings.gym || {}, log = { ...(g.log || {}), [key]: rec };
+      const cut = ymd(addDays(today, -730)); Object.keys(log).forEach(k => { if (k < cut) delete log[k]; });
+      act.patchSettings({ gym: { ...g, log } });
+      Sound.win(); buzz([30, 50, 30]);
+      const n = gymMonthCount(log, today);
+      setParty({ x: innerWidth / 2, y: innerHeight / 2, kicker: "WORKOUT DONE", line1: String(label || "Training").toUpperCase(), line2: "LOGGED.", text: `${n} workout${n === 1 ? "" : "s"} this month. Eat well tonight: protein and rice.` });
+    },
     saveReport: (key, snap) => { // freeze a finished month's result (quietly)
       const merged = { ...settings, reports: { ...(settings.reports || {}), [key]: snap } };
       setD(x => ({ ...x, state: { ...x.state, settings: merged } }));
@@ -2526,7 +2978,7 @@ function Main({ session, mode, setMode }) {
   const debtShown = isNow ? calc.remaining : calc.leftAfter(key);
   const progress = 1 - debtShown / calc.totalAll;
   const label = isNow ? "TODAY · " + dayLabel(today).toUpperCase() : monthLabel(key);
-  const event = isNow ? (calc.week.find(w => !w.done)?.title || "All clear this week") : (calc.events[key] || []).join(" · ");
+  const event = isNow ? (() => { const n = calc.week.find(w => !w.done && w.kind !== "task"); return n ? `Next: ${n.title}${n.amt ? " " + money(n.amt) : ""}${n.date ? " · " + dayLabel(n.date) : ""}` : "No bills this week"; })() : (calc.events[key] || []).join(" · ");
   const maxTm = calc.months.length - 1;
   const scrub = v => { const n = +v; if (n !== tm) { Sound.tick(); buzz(4); } if (n === maxTm && tm !== n) { Sound.chord(); buzz([30, 50, 30, 50, 120]); } setTm(n); };
   const ordDays = Math.max(0, diffDays(parseDate(settings.ord), today));
@@ -2535,7 +2987,7 @@ function Main({ session, mode, setMode }) {
     money: [["week", "This week"], ["ascent", "Ascent"], ["debts", "Money"], ["history", "History"]],
     invest: [["grove", "This month"], ["badges", "Badges"], ["rules", "Rules"]],
     career: [["study", "Study"], ["path", "Path"], ["todo", "To-dos"], ["employers", "Employers"]],
-    life: [["streak", "Stay free"], ["family", "Family"], ["milestones", "Journey"]],
+    life: [["streak", "Stay free"], ["gym", "Gym"], ["family", "Family"], ["milestones", "Journey"]],
   }[world];
   const W = worldOf(world);
   const doneN = calc.week.filter(w => w.done).length;
@@ -2552,6 +3004,11 @@ function Main({ session, mode, setMode }) {
     onPrev={repIdx > 0 ? () => { Sound.move(); if (!repSnap && !repData.live) act.saveReport(report, snapReport(repData)); setReport(repKeys[repIdx - 1]); } : null}
     onNext={repIdx >= 0 && repIdx < repKeys.length - 1 ? () => { Sound.move(); if (!repSnap && !repData.live) act.saveReport(report, snapReport(repData)); setReport(repKeys[repIdx + 1]); } : null} />;
 
+  const proofEl = <>
+    {proofView && <ProofView row={proofView} aiState={aiState} onClose={() => setProofView(null)} onRecheck={act.recheckProof} />}
+    {proofReq && <ProofSheet key={proofReq.key + String(proofReq.amount)} req={proofReq} aiState={aiState} onDone={p => { const f = proofReq.resolve; setProofReq(null); f(p); }} />}
+  </>;
+
   const hubView = view === "hub" && (
     <React.Fragment key="hub">
       {!loaded && <Loader jdm ready={!!d} onDone={() => { lsSet("ascent-loader-day", ymd(new Date())); setLoaded(true); }} />}
@@ -2560,6 +3017,7 @@ function Main({ session, mode, setMode }) {
       <Hub d={d} calc={calc} settings={settings} today={today} world={world} onEnter={enterStage} onSignOut={signOut} onUrge={() => { Sound.select(); setUrge(true); }} />
       {party && <Party {...party} onDone={() => setParty(null)} />}
       {repEl}
+      {proofEl}
       {toast && <div className="toast">{toast}</div>}
       {urge && <Urge left={calc.loansLeft} streak={calc.streak} beaten={Number(d.state.urges_beaten) || 0} onClose={() => setUrge(false)} onBeaten={beatUrge} onTalk={talkUrge} />}
     </React.Fragment>
@@ -2578,7 +3036,7 @@ function Main({ session, mode, setMode }) {
       <div className="ug-screen ug-stage">
       <StageBar card={ugCards(d, calc, settings, today).find(c => c.k === world)} tabs={tabs} tab={curTab} onTab={setTab} onBack={goHub}
         steps={steps.length} onGuide={() => { buzz(10); Sound.tick(); setGuide(true); }}
-        onMenu={() => { Sound.tick(); setMenu(true); }} onSpend={() => { buzz(10); Sound.tick(); setSheet({ type: "spend" }); }} />
+        onMenu={() => { Sound.tick(); setSound(Sound.on); setMusic(Music.on); setMenu(true); }} onSpend={() => { buzz(10); Sound.tick(); setSheet({ type: "spend" }); }} />
 
       <div className={"menu ug-menu-ov" + (menu ? " open" : "")} aria-hidden={!menu}>
         <button className="ug-close" aria-label="Close menu" onClick={() => { Sound.back(); setMenu(false); }}>✕</button>
@@ -2588,10 +3046,14 @@ function Main({ session, mode, setMode }) {
         <div className="menu-row">
           <button className="chip-btn" onClick={() => { setMenu(false); setSheet({ type: "settings" }); }}>Settings</button>
           <button className="chip-btn" onClick={() => { setMenu(false); doExport("json"); }}>Backup</button>
+          <button className="chip-btn" onClick={() => { setMenu(false); setSheet({ type: "receipts" }); }}>Receipts</button>
           <button className="chip-btn" onClick={() => { setMenu(false); setUrge(true); }}>Urge to trade</button>
           <button className="chip-btn" aria-pressed={sound} onClick={() => { setSfx(!sound); setSound(!sound); }}>Sound: {sound ? "on" : "off"}</button>
+          <button className="chip-btn" aria-pressed={music} onClick={() => { Music.set(!music); setMusic(!music); }}>Music: {music ? "on" : "off"}</button>
+          {music && <button className="chip-btn" onClick={() => Music.skip()}>Next track ⏭</button>}
           <button className="chip-btn" onClick={signOut}>Sign out</button>
         </div>
+        {music && <label className="ug-vol"><span>Music volume</span><input type="range" min="0" max="100" defaultValue={Math.round(Music.vol * 100)} onChange={e => Music.setVol(Number(e.target.value) / 100)} aria-label="Music volume" /></label>}
       </div>
 
       <div className="ug-pages" ref={pagesRef} data-tab={curTab}
@@ -2619,63 +3081,76 @@ function Main({ session, mode, setMode }) {
 
       <main>
         <section className="block wrap" id="week">
-          <div className="sechead"><Scramble text="THIS WEEK" /><span className="idx">{doneN}/{calc.week.length} done<br />{dayLabel(today)} → {dayLabel(addDays(today, 7))}</span></div>
+          <div className="sechead"><Scramble text="THIS WEEK" /><span className="idx">{calc.week.length - doneN} left<br />{dayLabel(today)} → {dayLabel(addDays(today, 7))}</span></div>
 
-          <div className="duo top-duo">
           <div className={"safe reveal" + (calc.safe != null && calc.safe < 0 ? " neg" : "")}>
             {calc.safe == null ? <>
               <div className="caps mute">Safe to spend</div>
               <p className="safe-empty">Tell the app how much is in your bank, and it'll show exactly what you can spend until payday.</p>
               <button className="chip-btn solid2" onClick={() => setSheet({ type: "cash" })}>Set my cash</button>
             </> : <>
-              <div className="row"><span className="caps mute">Safe to spend</span><span className="caps mute">until {calc.nextPay ? dayLabel(calc.payDate) : "next month"}</span></div>
+              <div className="row"><span className="caps mute">Safe to spend</span><span className="caps mute">until {calc.nextPay ? dayLabel(calc.payDate) : "next month"}{calc.nextPay ? " · +" + money(Number(calc.nextPay.amount_due)) : ""}</span></div>
               <div className="safe-v"><Count to={calc.safe} /></div>
               <div className="safe-sub">{calc.safe >= 0 ? <>About <b>{fmt(calc.safe / calc.daysToPay)}</b> a day for {calc.daysToPay} day{calc.daysToPay > 1 ? "s" : ""}</> : <>You're short <b>{fmt(-calc.safe, 2)}</b> for bills before payday. Line up backup now, not on the day.</>}</div>
               <div className="safe-row"><span>Cash {fmt(calc.cash, 2)} − bills before payday {fmt(calc.dueBefore, 2)}</span><button className="linkbtn" onClick={() => setSheet({ type: "cash" })}>Update cash{d.state.cash_updated_at ? ` · set ${ago(d.state.cash_updated_at)}` : ""}</button></div>
             </>}
           </div>
 
-          <div className="stats reveal">
-            <div><div className="v"><Count to={calc.spentTotal} /></div><div className="l">Spent of {fmt(settings.budget)}</div></div>
-            <div><div className="v">{calc.nextPay ? dayLabel(calc.nextPay._dt).slice(4) : "—"}</div><div className="l">Payday {calc.nextPay ? "+" + money(Number(calc.nextPay.amount_due)) : ""}</div></div>
-            <div><div className="v"><Count to={calc.week.filter(w => w.kind === "bill" && !w.done).reduce((s, w) => s + w.amt, 0)} /></div><div className="l">Bills due this week</div></div>
-          </div>
-          </div>
+          <GymToday settings={settings} today={today} onOpen={() => { lsSet("ascent-tab-life", "gym"); goWorld("life", null, null, () => setTabRaw("gym")); }} />
 
-          <div className="reveal">
-            {calc.week.length === 0 && <div className="empty">Nothing due this week. Add a task below, or enjoy the quiet.</div>}
-            {calc.week.map((w, i) => (
+          {(() => {
+            const pays = calc.week.filter(w => w.kind !== "task"), todos = calc.week.filter(w => w.kind === "task");
+            const open = l => l.filter(w => !w.done), shut = l => l.filter(w => w.done);
+            const left = l => open(l).length;
+            const row = (w, i) => (
               <div className="qwrap" key={w.kind + w.id}>
                 <button className={"quest" + (w.done ? " done" : "") + (w.late ? " late" : "")} aria-pressed={!!w.done}
                   onClick={e => { const b = e.currentTarget.getBoundingClientRect(); e.currentTarget.style.setProperty("--cx", (e.clientX - b.left) + "px"); e.currentTarget.style.setProperty("--cy", (e.clientY - b.top) + "px"); w.kind === "task" ? act.toggleTask(w.row) : act.toggleRow(w.row, e); }}>
                   <span className="i">{String(i + 1).padStart(2, "0")}</span>
-                  <span><div className="t">{w.title}{w.kind === "income" && <span className="tag2">in</span>}</div><div className="m">{w.late ? "Overdue · " : ""}{w.date ? dayLabel(w.date) : "Anytime"}</div></span>
+                  <span><div className="t">{w.title}{w.kind === "income" && <span className="tag2">in</span>}{w.kind === "task" && areaOf(w.row) !== "money" && <span className={"area-tag a-" + areaOf(w.row)}>{worldOf(areaOf(w.row)).name}</span>}</div><div className="m">{w.late ? "Overdue · " : ""}{w.date ? dayLabel(w.date) : "Anytime"}{w.done && w.kind === "bill" && w.row.proof_status ? " · " + PROOF_LABEL[w.row.proof_status] : ""}</div></span>
                   <span className="a">{w.amt ? (w.kind === "income" ? "+" : "") + money(w.amt) : ""}</span>
                   <span className="ck"><Tick /></span>
                 </button>
                 <button className="qedit" aria-label={"More options for " + w.title} onClick={() => w.kind === "task" ? setSheet({ type: "task", task: w.row }) : w.kind === "income" ? setSheet({ type: "income" }) : w.row.category === "Bill" ? setSheet({ type: "bill", bill: (settings.bills || []).find(b => b.name === w.row.entity_name) || null }) : w.row.category === "Parents" ? setSheet({ type: "parents-plan" }) : setSheet({ type: "debt-detail", entity: w.row.entity_name })}>⋯</button>
               </div>
-            ))}
-            <form className="addrow" onSubmit={e => { e.preventDefault(); const t = newTask.trim(); if (!t) return; act.addTask(t, newDue); setNewTask(""); setNewDue(""); }}>
-              <input className="field" id="newtask" placeholder="Add a task…" value={newTask} onChange={e => setNewTask(e.target.value)} aria-label="New task" />
-              <input className="field" id="newdue" type="date" value={newDue} onChange={e => setNewDue(e.target.value)} aria-label="Due date (optional)" />
-              <button className="cta" disabled={!newTask.trim()}>Add</button>
-            </form>
-            <div className="minis">
-              {calc.later.length > 0 && <button className="chip-btn" onClick={() => setShowLater(!showLater)}>{showLater ? "Hide" : "Show"} later tasks ({calc.later.length})</button>}
-              {calc.tasksDone.length > 0 && <button className="chip-btn" onClick={() => setShowDone(!showDone)}>{showDone ? "Hide" : "Show"} done ({calc.tasksDone.length})</button>}
-            </div>
-            {showLater && <div className="recent">{calc.later.map(t => <div key={t.id}><button className="rowbtn" onClick={() => setSheet({ type: "task", task: t })}>{taskLocked(t, today) ? "🔒 " : ""}{dayLabel(parseDate(t.due_date))} · {t.title}</button><span className="mute small">{taskLocked(t, today) ? `unlocks ${dayYr(taskUnlock(t))}` : ""}</span></div>)}</div>}
-            {showDone && <div className="recent">{calc.tasksDone.slice(0, 30).map(t => <div key={t.id}><button className="rowbtn done-t" onClick={() => act.toggleTask(t, true)} title="Tap to mark not done">✓ {t.title}</button><button className="linkbtn" onClick={() => setSheet({ type: "task", task: t })}>Edit</button></div>)}</div>}
-            {calc.soon.length > 0 && <div className="recent" style={{ marginTop: 16 }}>
-              <div><span className="caps">Coming up · next 30 days</span><span /></div>
-              {calc.soon.map(r => <div key={r.id}><button className="rowbtn" onClick={() => isOblig(r) ? setSheet({ type: "debt-detail", entity: r.entity_name }) : setSheet({ type: "income" })}>{dayLabel(r._dt)} · {isOblig(r) ? r.entity_name : "Allowance"}</button><span className="num">{isOblig(r) ? "" : "+"}{money(Number(r.amount_due))}</span></div>)}
-            </div>}
-          </div>
+            );
+            return <>
+              <div className="reveal">
+                <div className="wk-h"><span>Bills &amp; pay</span><small>{left(pays) ? `${left(pays)} to tick` : "all done"}</small></div>
+                {pays.length === 0 && <div className="empty">No bills this week.</div>}
+                {pays.length > 0 && left(pays) === 0 && <div className="empty">All paid. Nothing else due this week.</div>}
+                {open(pays).map(row)}
+                {showPaid && shut(pays).map((w, i) => row(w, i + left(pays)))}
+                {(calc.soon.length > 0 || shut(pays).length > 0) && <div className="minis">
+                  {shut(pays).length > 0 && <button className="chip-btn" aria-expanded={showPaid} onClick={() => setShowPaid(!showPaid)}>{showPaid ? "Hide" : "Show"} paid ({shut(pays).length})</button>}
+                  {calc.soon.length > 0 && <button className="chip-btn" aria-expanded={showSoon} onClick={() => setShowSoon(!showSoon)}>{showSoon ? "Hide" : "Show"} next 30 days ({calc.soon.length})</button>}
+                </div>}
+                {showSoon && <div className="recent">
+                  {calc.soon.map(r => <div key={r.id}><button className="rowbtn" onClick={() => isOblig(r) ? setSheet({ type: "debt-detail", entity: r.entity_name }) : setSheet({ type: "income" })}>{dayLabel(r._dt)} · {isOblig(r) ? r.entity_name : "Allowance"}</button><span className="num">{isOblig(r) ? "" : "+"}{money(Number(r.amount_due))}</span></div>)}
+                </div>}
+              </div>
+              <div className="reveal">
+                <div className="wk-h"><span>To-dos</span><small>{left(todos) ? `${left(todos)} to do` : "all done"}</small></div>
+                {todos.length === 0 && <div className="empty">No to-dos this week.</div>}
+                {todos.length > 0 && left(todos) === 0 && <div className="empty">All done for this week.</div>}
+                {open(todos).map(row)}
+                <div className="minis">
+                  <button className={"chip-btn" + (showAdd ? "" : " solid2")} aria-expanded={showAdd} onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Close" : "+ Add a to-do"}</button>
+                  {calc.later.length > 0 && <button className="chip-btn" aria-expanded={showLater} onClick={() => setShowLater(!showLater)}>{showLater ? "Hide" : "Show"} upcoming ({calc.later.length})</button>}
+                  {calc.tasksDone.length > 0 && <button className="chip-btn" aria-expanded={showDone} onClick={() => setShowDone(!showDone)}>{showDone ? "Hide" : "Show"} done ({calc.tasksDone.length})</button>}
+                </div>
+                {showAdd && <form className="addrow fold" onSubmit={e => { e.preventDefault(); const t = newTask.trim(); if (!t) return; act.addTask(t, newDue); setNewTask(""); setNewDue(""); setShowAdd(false); }}>
+                  <input className="field" id="newtask" placeholder="What do you need to do?" value={newTask} onChange={e => setNewTask(e.target.value)} aria-label="New to-do" autoFocus />
+                  <input className="field" id="newdue" type="date" value={newDue} onChange={e => setNewDue(e.target.value)} aria-label="Due date (optional)" />
+                  <button className="cta" disabled={!newTask.trim()}>Add</button>
+                </form>}
+                {showLater && <div className="recent">{calc.later.map(t => <div key={t.id}><button className="rowbtn" onClick={() => setSheet({ type: "task", task: t })}>{taskLocked(t, today) ? "🔒 " : ""}{dayLabel(parseDate(t.due_date))} {parseDate(t.due_date).getFullYear() !== today.getFullYear() ? parseDate(t.due_date).getFullYear() + " " : ""}· {t.title}</button><span className="mute small">{worldOf(areaOf(t)).name}</span></div>)}</div>}
+                {showDone && <div className="recent">{calc.tasksDone.slice(0, 30).map(t => <div key={t.id}><button className="rowbtn done-t" onClick={() => act.toggleTask(t, true)} title="Tap to mark not done">✓ {t.title}</button><button className="linkbtn" onClick={() => setSheet({ type: "task", task: t })}>Edit</button></div>)}</div>}
+              </div>
+            </>;
+          })()}
           {calc.week.length > 0 && doneN === calc.week.length && <div className="cleared" aria-live="polite"><Marquee items={["WEEK CLEARED —", "EVERY TASK DONE —", "WEEK CLEARED —", "EVERY TASK DONE —"]} speed={1} /></div>}
         </section>
-
-        <Stages currentIdx={calc.stageIdx} />
 
         <section className="block wrap" id="debts">
           <div className="sechead"><Scramble text="DEBTS" /><span className="idx">net worth<br /><b className={calc.netWorth < 0 ? "neg" : ""}>{fmt(calc.netWorth)}</b></span></div>
@@ -2698,6 +3173,9 @@ function Main({ session, mode, setMode }) {
             <div className="minis"><button className="chip-btn solid2" onClick={() => setSheet({ type: "debt" })}>+ Add a debt</button><button className="chip-btn" onClick={() => setSheet({ type: "due-days" })}>Due dates</button><button className="chip-btn" onClick={() => setSheet({ type: "income" })}>Income</button><button className="chip-btn" onClick={() => setSheet({ type: "cash" })}>Cash in bank</button></div>
           </div>
         </section>
+
+        <BillsSection d={d} settings={settings} today={today} act={act} setSheet={setSheet} />
+        <Stages currentIdx={calc.stageIdx} />
 
         <section className="block wrap" id="spend">
           <div className="sechead"><Scramble text="SPEND" /><span className="idx">budget<br /><b>{fmt(settings.budget)}</b> a month</span></div>
@@ -2727,7 +3205,6 @@ function Main({ session, mode, setMode }) {
           </div>
         </section>
 
-        <BillsSection d={d} settings={settings} today={today} act={act} setSheet={setSheet} />
         <ParentsSection d={d} settings={settings} today={today} act={act} setSheet={setSheet} />
 
         <section className="block wrap" id="history">
@@ -2783,6 +3260,7 @@ function Main({ session, mode, setMode }) {
       {sheet?.type === "due-days" && <DueDaysSheet ents={calc.ents} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "income" && <IncomeSheet rows={calc.inc} settings={settings} today={today} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "cash" && <CashSheet cash={calc.cash} onClose={() => setSheet(null)} onSave={act.setCash} />}
+      {sheet?.type === "receipts" && <ReceiptsSheet sched={d.sched} onClose={() => setSheet(null)} onOpen={r => setProofView(r)} />}
       {sheet?.type === "pot" && <PotSheet pot={d.pots.find(p => p.id === sheet.pot.id) || sheet.pot} moves={d.moves} onClose={() => setSheet(null)} act={act} />}
       {sheet?.type === "new-pot" && <NewPotSheet onClose={() => setSheet(null)} onSave={act.addPot} />}
       {sheet?.type === "task" && <TaskSheet task={sheet.task} onClose={() => setSheet(null)} act={act} />}
@@ -2796,6 +3274,7 @@ function Main({ session, mode, setMode }) {
       </Sheet>}
       {party && <Party {...party} onDone={() => setParty(null)} />}
       {repEl}
+      {proofEl}
       {toast && !undo && <div className="toast">{toast}</div>}
       {undo && <div className="toast undo" key={undo.id}><span>{undo.msg}</span><button onClick={() => { const f = undo.fn; setUndo(null); f(); flash("Undone"); }}>Undo</button></div>}
       {guide && <Guide steps={steps} aiState={aiState} onClose={() => setGuide(false)} onGo={guideGo} onAskClaude={() => { setGuide(false); openClaude(); }} />}

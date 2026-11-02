@@ -1130,3 +1130,23 @@ html[data-world=ug] .rw.done{border-color:rgba(140,255,63,.45)}
 .area-tag.a-invest{border-color:rgba(140,255,63,.45);color:#8CFF3F}
 .area-tag.a-life{border-color:rgba(255,95,162,.45);color:#FF5FA2}
 .addrow.fold{margin-top:10px}
+/* ---------- v23: Life → Gym ---------- */
+.ug-pages[data-tab=gym] #gym{display:block}
+.gym-week{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin:4px 0 14px}
+.gym-week span{display:grid;justify-items:center;gap:4px;padding:8px 0;border:1px solid var(--hair);border-radius:12px;background:var(--paper)}
+.gym-week span i{font-style:normal;font-size:11px;color:var(--mute);letter-spacing:.08em}
+.gym-week span b{font-size:14px;color:var(--ink)}
+.gym-week span.now{border-color:var(--ink)}
+.gym-week span.on{background:var(--ink)}
+.gym-week span.on b,.gym-week span.on i{color:var(--bg)}
+.gym-today .gym-t{font-size:clamp(26px,7vw,40px)}
+.gym-ex{padding:12px 0;border-top:1px solid var(--hair)}
+.gym-exh{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.gym-sets{display:grid;gap:6px;margin-top:8px}
+.gym-set{display:grid;grid-template-columns:44px 1fr 1fr;gap:6px;align-items:center}
+.gym-set .field.mini{padding:9px 10px;border-radius:10px;font-size:16px;min-width:0}
+.gym-prog .num{font-size:18px}
+.gymtoday{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;width:100%;text-align:left;margin:12px 0 4px;padding:14px 16px;border:1px solid var(--hair);border-radius:16px;background:var(--paper);color:var(--ink);font:inherit;cursor:pointer}
+.gymtoday .caps{grid-column:1}
+.gymtoday b{grid-column:1;font-size:17px}
+.gymtoday .go{grid-column:2;grid-row:1/3;font-weight:700}

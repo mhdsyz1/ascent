@@ -1,6 +1,6 @@
 // Ascent service worker: opens with no signal. Network first for the app, cache as fallback.
-const CACHE = "ascent-v22";
-const SHELL = ["./", "index.html", "style.css?v=19", "app.js?v=19", "ascent-banner.jpg", "ascent-hero.jpg", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const CACHE = "ascent-v23";
+const SHELL = ["./", "index.html", "style.css?v=23", "app.js?v=23", "ascent-banner.jpg", "ascent-hero.jpg", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE && k !== "ascent-img").map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {
